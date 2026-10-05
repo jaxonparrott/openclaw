@@ -119,8 +119,17 @@ describe("resolveDynamicSessionMutationRequiredScope", () => {
 
   it("reserves delivery-route clearing for administrators", () => {
     for (const [method, params] of [
-      ["sessions.patch", { key: "agent:main:main", expectedSessionId: "sess", clearDeliveryRoute: true }],
-      ["sessions.patchMany", { targets: [{ key: "agent:main:main", expectedSessionId: "sess" }], patch: { clearDeliveryRoute: true } }],
+      [
+        "sessions.patch",
+        { key: "agent:main:main", expectedSessionId: "sess", clearDeliveryRoute: true },
+      ],
+      [
+        "sessions.patchMany",
+        {
+          targets: [{ key: "agent:main:main", expectedSessionId: "sess" }],
+          patch: { clearDeliveryRoute: true },
+        },
+      ],
     ] as const) {
       expect(resolveDynamicSessionMutationRequiredScope(method, params)).toBe("operator.admin");
       expect(resolveSessionMethodScope(method, params)).toBeUndefined();

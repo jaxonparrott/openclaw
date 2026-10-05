@@ -8,7 +8,6 @@ import {
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -19,6 +18,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const pluginMetadata = vi.hoisted(() => ({
@@ -275,19 +275,24 @@ describe("sessions.patch sticky model persistence", () => {
   it("clears a Home route at the RPC and store without resetting its context", async () => {
     const sessionKey = "agent:main:main";
     const sessionId = "home-route-clear-fixture";
-    await upsertSessionEntryCore({ agentId: "main", sessionKey }, {
-      sessionId,
-      updatedAt: 1,
-      delivery: {
-        kind: "external",
-        route: { channel: "slack", accountId: "default", target: { to: "user:old-peer" } },
-        context: { channel: "slack", to: "user:old-peer", accountId: "default" },
-        origin: { provider: "slack", to: "user:old-peer", accountId: "default" },
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId,
+        updatedAt: 1,
+        delivery: {
+          kind: "external",
+          route: { channel: "slack", accountId: "default", target: { to: "user:old-peer" } },
+          context: { channel: "slack", to: "user:old-peer", accountId: "default" },
+          origin: { provider: "slack", to: "user:old-peer", accountId: "default" },
+        },
       },
-    });
+    );
     const patch = { key: sessionKey, expectedSessionId: sessionId, clearDeliveryRoute: true };
     expect((await patchSession(patch, ["operator.write"]))[0]).toBe(false);
-    expect(deliveryContextFromSession(loadSessionEntry({ agentId: "main", sessionKey }))).toMatchObject({ channel: "slack" });
+    expect(
+      deliveryContextFromSession(loadSessionEntry({ agentId: "main", sessionKey })),
+    ).toMatchObject({ channel: "slack" });
     expect((await patchSession(patch))[0]).toBe(true);
     const reloaded = loadSessionEntry({ agentId: "main", sessionKey });
     expect(reloaded?.sessionId).toBe(sessionId);

@@ -6,13 +6,13 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { withAgentSessionModelPatchOrigin } from "./session-model-patch-origin.js";
 import { projectSessionsPatchEntry } from "./sessions-patch.js";
 import {
