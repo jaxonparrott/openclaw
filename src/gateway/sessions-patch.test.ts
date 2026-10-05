@@ -7,7 +7,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -670,10 +669,14 @@ describe("gateway sessions patch", () => {
 
   test("clears an old Home reply route without resetting its session identity", async () => {
     const store = mainStoreEntry({
-      delivery: normalizeSessionDeliveryState({
+      delivery: {
+        kind: "external",
+        route: { channel: "slack", accountId: "default", target: { to: "user:old-peer" } },
         context: { channel: "slack", to: "user:old-peer", accountId: "default" },
-      }),
+        origin: { provider: "slack", to: "user:old-peer", accountId: "default" },
+      },
     });
+    expect(deliveryContextFromSession(store[MAIN_SESSION_KEY])).toMatchObject({ channel: "slack" });
     expectPatchError(
       await runPatch({ store, patch: { key: MAIN_SESSION_KEY, clearDeliveryRoute: true } }),
       "expectedSessionId",

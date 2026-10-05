@@ -9,7 +9,6 @@ import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -279,9 +278,12 @@ describe("sessions.patch sticky model persistence", () => {
     await upsertSessionEntryCore({ agentId: "main", sessionKey }, {
       sessionId,
       updatedAt: 1,
-      delivery: normalizeSessionDeliveryState({
+      delivery: {
+        kind: "external",
+        route: { channel: "slack", accountId: "default", target: { to: "user:old-peer" } },
         context: { channel: "slack", to: "user:old-peer", accountId: "default" },
-      }),
+        origin: { provider: "slack", to: "user:old-peer", accountId: "default" },
+      },
     });
     const patch = { key: sessionKey, expectedSessionId: sessionId, clearDeliveryRoute: true };
     expect((await patchSession(patch, ["operator.write"]))[0]).toBe(false);
