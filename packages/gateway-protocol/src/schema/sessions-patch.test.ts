@@ -2,6 +2,14 @@ import { describe, expect, it } from "vitest";
 import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
+  it("accepts only an explicit route-clear request", () => {
+    expect(validateSessionsPatchParams({ key: "agent:main:main", clearDeliveryRoute: true })).toBe(true);
+    expect(validateSessionsPatchParams({ key: "agent:main:main", clearDeliveryRoute: false })).toBe(false);
+    expect(validateSessionsPatchManyParams({
+      targets: [{ key: "agent:main:main", expectedSessionId: "sess" }],
+      patch: { clearDeliveryRoute: true },
+    })).toBe(true);
+  });
   it.each([
     [1_800_000_000_000, true],
     [null, true],

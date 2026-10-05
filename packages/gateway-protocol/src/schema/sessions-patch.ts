@@ -87,6 +87,8 @@ const SessionsPatchMutationProperties = {
   inheritedToolAllow: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   inheritedToolDeny: Type.Optional(Type.Union([Type.Array(NonEmptyString), Type.Null()])),
   sendPolicy: Type.Optional(Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()])),
+  /** Operator-only: remove the session's persisted external reply route without resetting context. */
+  clearDeliveryRoute: Type.Optional(Type.Literal(true)),
   groupActivation: Type.Optional(
     Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
   ),

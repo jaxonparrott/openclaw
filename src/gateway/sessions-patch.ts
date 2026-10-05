@@ -284,6 +284,9 @@ function* projectSessionPatchSteps(
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
+  if (patch.clearDeliveryRoute && (!existing?.sessionId || patch.expectedSessionId !== existing.sessionId)) {
+    return invalid("clearDeliveryRoute requires the current expectedSessionId for an existing session");
+  }
   // A read acknowledgement is not session activity: ageing the row here would move a
   // just-opened session to the top of recency order, so only the read state commits.
   const unreadAckOnly = isSessionUnreadAckOnlyPatch(patch);
@@ -301,6 +304,9 @@ function* projectSessionPatchSteps(
     // Stamp only genuinely new rows; existing placeholder aliases must not be restamped.
     ...(creation && params.existingEntry === undefined ? buildSessionCreationStamp(creation) : {}),
   };
+  if (patch.clearDeliveryRoute) {
+    next.delivery = { kind: "none" };
+  }
   if (existing && !existing.sessionId) {
     delete next.label;
     delete next.autoLabel;

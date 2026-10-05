@@ -6,6 +6,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { contextBudgetStatusFixture } from "../config/sessions/context-budget.test-support.js";
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -664,6 +666,27 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.responseUsage).toBeUndefined();
+  });
+
+  test("clears an old Home reply route without resetting its session identity", async () => {
+    const store = mainStoreEntry({
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "slack", to: "user:old-peer", accountId: "default" },
+      }),
+    });
+    expectPatchError(
+      await runPatch({ store, patch: { key: MAIN_SESSION_KEY, clearDeliveryRoute: true } }),
+      "expectedSessionId",
+    );
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, expectedSessionId: "sess", clearDeliveryRoute: true },
+      }),
+    );
+    expect(entry.sessionId).toBe("sess");
+    expect(entry.delivery).toEqual({ kind: "none" });
+    expect(deliveryContextFromSession(entry)).toBeUndefined();
   });
 
   test("clears reasoningLevel when patch sets null", async () => {
