@@ -8,6 +8,8 @@ import {
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -271,6 +273,26 @@ registerSessionNativeRuntimeConsentTests({
 registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
+  it("clears a Home route at the RPC and store without resetting its context", async () => {
+    const sessionKey = "agent:main:main";
+    const sessionId = "home-route-clear-fixture";
+    await upsertSessionEntryCore({ agentId: "main", sessionKey }, {
+      sessionId,
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "slack", to: "user:old-peer", accountId: "default" },
+      }),
+    });
+    const patch = { key: sessionKey, expectedSessionId: sessionId, clearDeliveryRoute: true };
+    expect((await patchSession(patch, ["operator.write"]))[0]).toBe(false);
+    expect(deliveryContextFromSession(loadSessionEntry({ agentId: "main", sessionKey }).entry)).toMatchObject({ channel: "slack" });
+    expect((await patchSession(patch))[0]).toBe(true);
+    const reloaded = loadSessionEntry({ agentId: "main", sessionKey }).entry;
+    expect(reloaded?.sessionId).toBe(sessionId);
+    expect(reloaded?.delivery).toEqual({ kind: "none" });
+    expect(deliveryContextFromSession(reloaded)).toBeUndefined();
+  });
+
   registerSessionSandboxStickyModelTests({
     getConfig: () => cfg,
     patchSession,

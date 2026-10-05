@@ -88,6 +88,7 @@ function createSessionPatchHandler(
       const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
       if (
         (inputPatch.permissionMode === "full" ||
+          inputPatch.clearDeliveryRoute === true ||
           inputPatch.sandboxMode !== undefined ||
           inputPatch.nativeRuntimeConsent !== undefined) &&
         client !== null &&
