@@ -287,9 +287,9 @@ describe("sessions.patch sticky model persistence", () => {
     });
     const patch = { key: sessionKey, expectedSessionId: sessionId, clearDeliveryRoute: true };
     expect((await patchSession(patch, ["operator.write"]))[0]).toBe(false);
-    expect(deliveryContextFromSession(loadSessionEntry({ agentId: "main", sessionKey }).entry)).toMatchObject({ channel: "slack" });
+    expect(deliveryContextFromSession(loadSessionEntry({ agentId: "main", sessionKey }))).toMatchObject({ channel: "slack" });
     expect((await patchSession(patch))[0]).toBe(true);
-    const reloaded = loadSessionEntry({ agentId: "main", sessionKey }).entry;
+    const reloaded = loadSessionEntry({ agentId: "main", sessionKey });
     expect(reloaded?.sessionId).toBe(sessionId);
     expect(reloaded?.delivery).toEqual({ kind: "none" });
     expect(deliveryContextFromSession(reloaded)).toBeUndefined();
