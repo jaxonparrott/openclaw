@@ -99,15 +99,10 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
 
-  const appendAssistantText = (delta: string, sourceText = delta) => {
-    if (claudeStreamJson && currentClaudeMessageId && delta) {
-      assistantTextReceipt?.append({
-        start: assistantText.length + delta.length - sourceText.length,
-        end: assistantText.length + delta.length,
-        messageId: currentClaudeMessageId,
-        text: sourceText,
-        sessionId,
-      });
+  const appendAssistantText = (delta: string, sourceText = delta, preCaptured = false) => {
+    if (!preCaptured && claudeStreamJson && delta) {
+      const start = assistantText.length + delta.length - sourceText.length;
+      assistantTextReceipt?.appendSelected(start, currentClaudeMessageId, sourceText, sessionId);
     }
     assistantText += delta;
     params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
@@ -119,12 +114,14 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     const delta = pendingClaudeText;
     pendingClaudeText = "";
-    appendAssistantText(delta);
+    assistantTextReceipt?.selectBuffered(assistantText.length);
+    appendAssistantText(delta, delta, true);
   };
 
   const flushPendingClaudeCommentaryText = () => {
     const text = pendingClaudeText.trim();
     pendingClaudeText = "";
+    assistantTextReceipt?.discardBuffered();
     if (text) {
       params.onCommentaryText?.(text);
     }
@@ -136,6 +133,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     if (classifyClaudeCommentary) {
       pendingClaudeText = `${pendingClaudeText}${delta}`;
+      assistantTextReceipt?.buffer(currentClaudeMessageId, delta, sessionId);
       return;
     }
     // A tool_use block starts a new post-tool segment even inside one assistant
@@ -184,6 +182,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     finishTaggedReasoningMessage();
     taggedReasoningRouter = createLeadingTaggedReasoningRouter();
     currentTaggedReasoningText = "";
+    assistantTextReceipt?.startMessage();
     pendingMessageSeparator = true;
     previousMessageHadToolUse = currentMessageHadToolUse;
     currentMessageHadToolUse = false;
@@ -340,13 +339,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           // A stream delta can precede the first identified snapshot for the same message.
           if (currentClaudeMessageId === undefined) {
             currentClaudeMessageId = messageId;
+            assistantTextReceipt?.identifyMessage(messageId, sessionId);
           } else {
             beginClaudeMessage(messageId);
           }
         }
       }
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
-      assistantTextReceipt?.observe(parsed, currentClaudeMessageId, sessionId);
       params.onAssistantMessage?.(parsed.message);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {
         sawClaudeSyntheticNoResponse = true;
@@ -599,6 +598,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         };
       }
     }
+    // Observe after snapshot text ingestion and tool classification; deferred
+    // spans retain their source identity until selection.
+    assistantTextReceipt?.observe(parsed, currentClaudeMessageId, sessionId);
   };
 
   const handleJsonlLine = (rawLine: string) => {
