@@ -591,6 +591,11 @@ export interface Tool<TParameters extends TSchema = TSchema> {
   name: string;
   description: string;
   parameters: TParameters;
+  /**
+   * `false` keeps calls synchronous where the provider can keep generating after a call
+   * (OpenAI async tools): the response pauses until earlier results are delivered.
+   */
+  async?: false;
 }
 
 /** Text-model request context shared by provider adapters. */

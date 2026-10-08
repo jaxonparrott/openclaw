@@ -24,6 +24,7 @@ export function wrapToolDefinition<
     ...(definition.outputSchema ? { outputSchema: definition.outputSchema } : {}),
     prepareArguments: definition.prepareArguments,
     executionMode: definition.executionMode,
+    ...(definition.async === false ? { async: false as const } : {}),
     execute: (toolCallId, params, signal, onUpdate) =>
       definition.execute(toolCallId, params, signal, onUpdate, ctxFactory?.() as ExtensionContext),
   };
@@ -55,6 +56,7 @@ export function createToolDefinitionFromAgentTool(tool: AgentTool): ToolDefiniti
     ...(tool.outputSchema ? { outputSchema: tool.outputSchema } : {}),
     prepareArguments: tool.prepareArguments,
     executionMode: tool.executionMode,
+    ...(tool.async === false ? { async: false as const } : {}),
     execute: async (toolCallId, params, signal, onUpdate) =>
       tool.execute(toolCallId, params, signal, onUpdate),
   };

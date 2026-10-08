@@ -485,6 +485,7 @@ export interface ToolDefinition<
    * If omitted, the default execution mode applies.
    */
   executionMode?: ToolExecutionMode;
+  async?: AgentTool["async"];
 
   /** Execute the tool. */
   execute(

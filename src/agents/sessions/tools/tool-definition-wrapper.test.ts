@@ -2,12 +2,20 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { isCodeModeControlTool, markCodeModeControlTool } from "../../code-mode-control-tools.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "./tool-definition-wrapper.js";
 
 describe("tool definition result content source", () => {
+  it("keeps the real wait tool synchronous through both adapter directions", () => {
+    const tool = createSessionsYieldTool({ sessionId: "session" });
+    const definition = createToolDefinitionFromAgentTool(tool);
+    expect(definition.async).toBe(false);
+    expect(wrapToolDefinition(definition).async).toBe(false);
+  });
+
   it("survives both AgentTool adapter directions", () => {
     const tool: AgentTool = {
       name: "network_reader",
