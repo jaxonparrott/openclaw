@@ -27,6 +27,45 @@ const minimalAddParams = {
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
+
+describe("command failure recovery ownership", () => {
+  const policy = {
+    agentId: "main",
+    message: "Inspect authorized evidence",
+    toolsAllow: ["read"],
+    timeoutSeconds: 30,
+  };
+  it("accepts explicit policy and nullable removal", () => {
+    expect(validateCronAddParams({ ...minimalAddParams, failureRecovery: policy })).toBe(true);
+    expect(validateCronUpdateParams({ id: "job-1", patch: { failureRecovery: null } })).toBe(true);
+  });
+  it("rejects forged scheduler relation or consumed-start state through every public input", () => {
+    for (const field of ["commandRecoveryOrigin", "failureRecovery"]) {
+      const relation = {
+        jobId: "parent",
+        failedReceiptId: "receipt",
+        parentConfigRevision: "revision",
+        startedAtMs: 1,
+      };
+      expect(validateCronAddParams({ ...minimalAddParams, state: { [field]: relation } })).toBe(
+        false,
+      );
+      expect(
+        validateCronUpdateParams({ id: "job-1", patch: { state: { [field]: relation } } }),
+      ).toBe(false);
+      expect(validateCronUpdateParams({ id: "job-1", patch: { [field]: relation } })).toBe(false);
+    }
+  });
+  it("rejects unbounded recovery deadlines and malformed caps", () => {
+    for (const value of [
+      { ...policy, timeoutSeconds: 0 },
+      { ...policy, timeoutSeconds: 2401 },
+      { ...policy, toolsAllow: [""] },
+    ]) {
+      expect(validateCronAddParams({ ...minimalAddParams, failureRecovery: value })).toBe(false);
+    }
+  });
+});
 const add = (overrides: Record<string, unknown> = {}) => ({ ...minimalAddParams, ...overrides });
 const update = (patch: Record<string, unknown>, overrides: Record<string, unknown> = {}) => ({
   id: "job-1",

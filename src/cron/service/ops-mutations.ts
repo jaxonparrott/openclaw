@@ -109,6 +109,13 @@ export async function add(
     }
     await ensureLoadedForOperation(state);
     const agentId = resolveCronJobEffectiveAgentId(input, resolveCurrentDefaultAgentId(state));
+    if (
+      input.failureRecovery &&
+      state.deps.isAgentAvailable &&
+      !state.deps.isAgentAvailable(normalizeOptionalAgentId(input.failureRecovery.agentId)!)
+    ) {
+      throw new Error("command failure recovery agent is unavailable");
+    }
     const normalizedId = normalizeOptionalString(input.id);
     if (input.id !== undefined && !normalizedId) {
       throw new Error("cron job id must not be blank");
@@ -318,6 +325,13 @@ async function updateLoadedJob(params: {
   }
   await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
+  if (
+    patch.failureRecovery &&
+    state.deps.isAgentAvailable &&
+    !state.deps.isAgentAvailable(normalizeOptionalAgentId(patch.failureRecovery.agentId)!)
+  ) {
+    throw new Error("command failure recovery agent is unavailable");
+  }
   // Existing monitors are config-driven: any patch (disable, reschedule,
   // repurpose) would silently diverge from its owner until the next reconcile,
   // so updates are rejected outright. Removal stays allowed only to the owner.
