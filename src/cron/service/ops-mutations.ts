@@ -326,6 +326,16 @@ async function updateLoadedJob(params: {
   await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
   if (
+    opts?.preserveRunning &&
+    (job.payload.kind !== "command" ||
+      Object.keys(patch).length !== 1 ||
+      patch.enabled !== false ||
+      !opts.expectedConfigRevision ||
+      resolveCronJobConfigRevision(job) !== opts.expectedConfigRevision)
+  ) {
+    throw new TypeError("preserveRunning requires an exact revision-checked command disable");
+  }
+  if (
     patch.failureRecovery &&
     state.deps.isAgentAvailable &&
     !state.deps.isAgentAvailable(normalizeOptionalAgentId(patch.failureRecovery.agentId)!)
@@ -399,7 +409,8 @@ async function updateLoadedJob(params: {
       patch.agentId !== undefined
         ? resolveCronJobEffectiveAgentId(nextJob, resolveCurrentDefaultAgentId(state))
         : undefined,
-    preconditionJob: precondition ? job : undefined,
+    preconditionJob: precondition || opts?.preserveRunning ? job : undefined,
+    preserveRunning: opts?.preserveRunning,
     mutationMethod: "cron.update",
     ownerMutation,
   });
