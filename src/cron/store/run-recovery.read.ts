@@ -4,6 +4,7 @@ import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import type {
   CronRunRecoveryObservation,
+  CronRunRecoveryProposal,
   CronRunRecoveryReadCommand,
 } from "./run-recovery-read.types.js";
 
@@ -17,7 +18,9 @@ export function observeCronRunRecoveryInDatabase(
         readActiveCronRunReceiptsInDatabase(
           database,
           command.storeKey,
-          command.proposals.map((proposal) => proposal.jobId),
+          command.includeActiveReceipts
+            ? undefined
+            : command.proposals.map((proposal) => proposal.jobId),
         ).map((receipt) => [receipt.jobId, receipt]),
       );
       const runningJobIds = new Set(
@@ -25,25 +28,43 @@ export function observeCronRunRecoveryInDatabase(
           .filter((proposal) => proposal.runningAtMs !== undefined)
           .map((proposal) => proposal.jobId),
       );
+      const proposedJobIds = new Set(command.proposals.map((proposal) => proposal.jobId));
+      const discoveredJobIds = [...receipts.keys()].filter((jobId) => !proposedJobIds.has(jobId));
+      for (const jobId of discoveredJobIds) {
+        runningJobIds.add(jobId);
+      }
       const jobs = new Map(
         loadedCronStoreFromRows(
           loadCronRows(database, command.storeKey, runningJobIds),
         ).store.jobs.map((job) => [job.id, job]),
       );
+      // Retain caller proposal order; startup appends custody whose marker or job retired.
+      const proposals = [
+        ...command.proposals,
+        ...discoveredJobIds.map((jobId) => {
+          const job = jobs.get(jobId);
+          return { jobId, queuedAtMs: job?.state.queuedAtMs, runningAtMs: job?.state.runningAtMs };
+        }),
+      ];
       return {
         kind: "observed",
-        proposals: command.proposals.map((proposal) => {
+        proposals: proposals.map((proposal) => {
           const job = jobs.get(proposal.jobId);
-          return {
+          const observed: CronRunRecoveryProposal = {
             jobId: proposal.jobId,
-            ...(proposal.queuedAtMs === undefined ? {} : { queuedAtMs: proposal.queuedAtMs }),
-            ...(proposal.runningAtMs === undefined ? {} : { runningAtMs: proposal.runningAtMs }),
             receipt: receipts.get(proposal.jobId),
             runningReceiptId:
               job?.state.runningAtMs === proposal.runningAtMs
                 ? job?.state.runningReceiptId
                 : undefined,
           };
+          if (proposal.queuedAtMs !== undefined) {
+            observed.queuedAtMs = proposal.queuedAtMs;
+          }
+          if (proposal.runningAtMs !== undefined) {
+            observed.runningAtMs = proposal.runningAtMs;
+          }
+          return observed;
         }),
       };
     });

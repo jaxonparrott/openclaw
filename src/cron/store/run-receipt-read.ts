@@ -120,20 +120,22 @@ export function readCronRunReceiptCurrentFactsInDatabase(
 export function readActiveCronRunReceiptsInDatabase(
   database: DatabaseSync,
   storeKey: string | undefined,
-  jobIds: readonly string[],
+  jobIds?: readonly string[],
 ): CronRunReceiptRecoveryCandidate[] {
   let query = getNodeSqliteKysely<CronRunReceiptDatabase>(database)
     .selectFrom("cron_run_receipts")
     .selectAll()
-    .where("status", "=", "running")
-    .where("job_id", "in", sqliteStringSet(jobIds));
+    .where("status", "=", "running");
+  if (jobIds !== undefined) {
+    query = query.where("job_id", "in", sqliteStringSet(jobIds));
+  }
   if (storeKey !== undefined) {
     query = query.where("store_key", "=", storeKey);
   }
   const rows = executeSqliteQuerySync(database, query).rows;
-  const selected = new Set(jobIds);
+  const selected = jobIds === undefined ? undefined : new Set(jobIds);
   return rows
-    .filter((row) => selected.has(row.job_id))
+    .filter((row) => selected === undefined || selected.has(row.job_id))
     .map((row) => receiptHandle(receiptFromRow(row)));
 }
 

@@ -49,14 +49,16 @@ async function observeRecoveryProposals(
   context: OpenClawStateWorkerContext,
   proposals: readonly CronRunRecoveryProposal[],
   assertCurrent: () => void,
+  includeActiveReceipts: boolean,
 ): Promise<CronRunRecoveryProposal[]> {
-  if (proposals.length === 0) {
+  if (proposals.length === 0 && !includeActiveReceipts) {
     return [];
   }
   const command = {
     type: "cron.observeRunRecovery" as const,
     storeKey: cronStoreKey(state.deps.storePath),
     proposals,
+    includeActiveReceipts,
   };
   assertCurrent();
   let result = await executeExistingOpenClawStateRead({}, command);
@@ -190,18 +192,25 @@ export async function recoverCronRunProposals(
     mode?: "startup" | "reclaim";
     signal?: AbortSignal;
     isCurrent?: () => boolean;
+    includeActiveReceipts?: boolean;
     onRecovery: (proposal: CronRunRecoveryProposal, result: CronRunRecoveryResult) => void;
   },
 ): Promise<void> {
   const context = captureOpenClawStateWorkerContext();
   const assertCurrent = recoveryAuthority(state, context, options.signal, options.isCurrent);
   try {
-    const observed = await observeRecoveryProposals(state, context, targets, assertCurrent);
+    const observed = await observeRecoveryProposals(
+      state,
+      context,
+      targets,
+      assertCurrent,
+      options.includeActiveReceipts ?? false,
+    );
     const repairs: CronRunRecoveryProposal[] = [];
     for (let index = 0; index < observed.length; index += 1) {
       const current = observed[index]!;
-      const target = targets[index]!;
-      const proposal = target.receipt ? target : current;
+      const target = targets[index];
+      const proposal = target?.receipt ? target : current;
       const result = observedRecoveryResult(state, proposal, current);
       if (result) {
         options.onRecovery(proposal, result);

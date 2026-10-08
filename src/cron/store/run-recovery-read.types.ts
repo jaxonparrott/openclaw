@@ -16,4 +16,6 @@ export type CronRunRecoveryReadCommand = {
   type: "cron.observeRunRecovery";
   storeKey: string;
   proposals: readonly CronRunRecoveryProposal[];
+  /** Startup discovers unmarked and removed-job custody in this store partition. */
+  includeActiveReceipts?: boolean;
 };

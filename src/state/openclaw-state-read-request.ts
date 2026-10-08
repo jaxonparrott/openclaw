@@ -129,6 +129,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     return {
       type: command.type,
       storeKey: command.storeKey,
+      includeActiveReceipts: command.includeActiveReceipts,
       proposals: command.proposals.map(({ jobId, queuedAtMs, runningAtMs }) => ({
         jobId,
         ...(queuedAtMs === undefined ? {} : { queuedAtMs }),
@@ -329,7 +330,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
         Buffer.byteLength(proposal.jobId, "utf8") +
         (proposal.queuedAtMs === undefined ? 0 : 8) +
         (proposal.runningAtMs === undefined ? 0 : 8),
-      bytes + Buffer.byteLength(command.storeKey, "utf8"),
+      bytes + Buffer.byteLength(command.storeKey, "utf8") + 1,
     );
   }
   if (command.type === "cron.scratch") {

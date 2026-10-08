@@ -193,6 +193,7 @@ export async function start(state: CronServiceState): Promise<void> {
       return;
     }
     const proposals: CronRunRecoveryProposal[] = [];
+    let recoveryChanged = false;
     for (const job of state.store?.jobs ?? []) {
       job.state ??= {};
       if (typeof job.state.queuedAtMs === "number") {
@@ -205,12 +206,15 @@ export async function start(state: CronServiceState): Promise<void> {
     try {
       await recoverCronRunProposals(state, proposals, {
         mode: "startup",
+        includeActiveReceipts: true,
         onRecovery(proposal, result) {
-          applyRecoveryResult({ state, proposal, result, interruptedRuns, skipJobIds });
+          recoveryChanged =
+            applyRecoveryResult({ state, proposal, result, interruptedRuns, skipJobIds }) ||
+            recoveryChanged;
         },
       });
     } finally {
-      if (proposals.length > 0) {
+      if (proposals.length > 0 || recoveryChanged) {
         await ensureLoaded(state, { forceReload: true });
       }
       // Publish committed interruptions before a replacement can start catch-up.

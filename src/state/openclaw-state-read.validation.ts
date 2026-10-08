@@ -153,6 +153,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.includeAvailability === "boolean") ||
       (input.command.type === "cron.observeRunRecovery" &&
         typeof input.command.storeKey === "string" &&
+        (input.command.includeActiveReceipts === undefined ||
+          typeof input.command.includeActiveReceipts === "boolean") &&
         Array.isArray(input.command.proposals) &&
         input.command.proposals.every(
           (proposal: unknown) =>
