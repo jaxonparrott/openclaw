@@ -203,6 +203,12 @@ export function repairCronRunInDatabase(params: {
                 runReceipt: proposal.receipt,
               },
               new Map(previousChildren.map((current) => [current.id, current])),
+              previousChildId !== undefined &&
+                findActiveCronRunReceiptInDatabase({
+                  database: database.db,
+                  storePath: storeKey,
+                  jobId: previousChildId,
+                }) !== undefined,
             )
           : undefined;
       if (child) {
