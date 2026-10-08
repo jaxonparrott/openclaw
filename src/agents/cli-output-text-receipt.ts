@@ -1,39 +1,81 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CliOutput } from "./cli-output-contracts.js";
+import { isClaudeSubagentRecord } from "./cli-output-records.js";
 
-type TextSpan = { start: number; end: number; messageId: string; text: string; sessionId?: string };
+type TextSpan = {
+  start?: number;
+  messageId?: string;
+  text: string;
+  sessionId?: string;
+};
 
 /** Provider identities are admitted only after the parser selects their complete text. */
 export class CliAssistantTextReceipt {
   private readonly spans: TextSpan[] = [];
   private readonly messages = new Map<
     string,
-    { messageId: string; text: string; sessionId?: string }
+    { messageId: string; text: string; sessionId?: string; spans: TextSpan[] }
   >();
   private lastExternalId: string | undefined;
+  private lastObservedSpanEnd = 0;
+  private bufferedSpans: TextSpan[] = [];
+  private messageSpanStart = 0;
 
-  append(span: TextSpan): void {
-    const last = this.spans.at(-1);
-    if (
-      last?.messageId === span.messageId &&
-      last.sessionId === span.sessionId &&
-      last.end === span.start
-    ) {
-      last.end = span.end;
-      last.text += span.text;
-    } else {
-      this.spans.push(span);
+  append(span: TextSpan): TextSpan {
+    this.spans.push(span);
+    return span;
+  }
+
+  select(spans: TextSpan[], start: number): void {
+    let cursor = start;
+    for (const span of spans) {
+      span.start = cursor;
+      cursor += span.text.length;
     }
   }
 
+  buffer(messageId: string | undefined, text: string, sessionId?: string): void {
+    this.bufferedSpans.push(this.append({ messageId, text, sessionId }));
+  }
+
+  startMessage(): void {
+    this.messageSpanStart = this.spans.length;
+  }
+
+  identifyMessage(messageId: string, sessionId?: string): void {
+    for (const span of this.spans.slice(this.messageSpanStart)) {
+      if (span.messageId === undefined && span.sessionId === sessionId) {
+        span.messageId = messageId;
+      }
+    }
+  }
+
+  selectBuffered(start: number): void {
+    this.select(this.bufferedSpans, start);
+    this.bufferedSpans = [];
+  }
+
+  discardBuffered(): void {
+    this.bufferedSpans = [];
+  }
+
   observe(
-    externalId: unknown,
-    messageId: string,
-    message: Record<string, unknown>,
+    parsed: Record<string, unknown>,
+    messageId: string | undefined,
     sessionId?: string,
   ): void {
-    const id = typeof externalId === "string" ? externalId.trim() : "";
+    if (
+      parsed.type !== "assistant" ||
+      !isRecord(parsed.message) ||
+      isClaudeSubagentRecord(parsed) ||
+      !messageId
+    ) {
+      return;
+    }
+    const message = parsed.message;
+    const cumulative = message.stop_reason === null;
+    const id = typeof parsed.uuid === "string" ? parsed.uuid.trim() : "";
     const text = Array.isArray(message.content)
       ? message.content
           .map((block) =>
@@ -45,8 +87,31 @@ export class CliAssistantTextReceipt {
       : typeof message.content === "string"
         ? message.content
         : "";
+    let spans = this.spans
+      .slice(this.lastObservedSpanEnd)
+      .filter((span) => span.messageId === messageId && span.sessionId === sessionId);
+    if (cumulative && spans.length && spans.map((span) => span.text).join("") !== text) {
+      const prefix = this.spans.filter(
+        (span) => span.messageId === messageId && span.sessionId === sessionId,
+      );
+      // Null stop_reason also occurs on completed per-block records. Only an
+      // exact emitted prefix with new source spans proves a cumulative body.
+      if (prefix.map((span) => span.text).join("") === text) {
+        spans = prefix;
+      }
+    }
+    this.lastObservedSpanEnd = this.spans.length;
     if (id && text) {
-      this.messages.set(id, { messageId, text, sessionId });
+      const previous = this.messages.get(id);
+      if (
+        !spans.length &&
+        previous?.messageId === messageId &&
+        previous.sessionId === sessionId &&
+        previous.text === text
+      ) {
+        spans = previous.spans;
+      }
+      this.messages.set(id, { messageId, text, sessionId, spans });
       this.lastExternalId = id;
     }
   }
@@ -72,11 +137,12 @@ export class CliAssistantTextReceipt {
       }
       const selected =
         resultText === undefined
-          ? this.spans
+          ? native.spans
               .filter(
                 (span) =>
                   span.messageId === native.messageId &&
                   span.sessionId === sessionId &&
+                  span.start !== undefined &&
                   span.start >= start,
               )
               .map((span) => span.text)
