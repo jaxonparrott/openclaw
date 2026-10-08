@@ -138,6 +138,29 @@ function validateFullJob(
   configuredChannels?: readonly string[],
 ) {
   const cronConfig = context.cronConfig;
+  const recovery = job.failureRecovery;
+  if (
+    recovery &&
+    (!recovery.agentId?.trim() ||
+      !recovery.message?.trim() ||
+      recovery.message.length > 8_000 ||
+      (recovery.toolsAllow !== undefined &&
+        (!Array.isArray(recovery.toolsAllow) ||
+          recovery.toolsAllow.some((tool) => typeof tool !== "string" || !tool.trim()))) ||
+      (recovery.timeoutSeconds !== undefined &&
+        (!Number.isInteger(recovery.timeoutSeconds) ||
+          recovery.timeoutSeconds < 1 ||
+          recovery.timeoutSeconds > 2_400)))
+  ) {
+    throw new Error("invalid command failure recovery policy");
+  }
+  if (
+    job.failureRecovery &&
+    (job.payload.kind !== "command" ||
+      (job.schedule.kind !== "every" && job.schedule.kind !== "cron"))
+  ) {
+    throw new Error("failure recovery requires a recurring command job");
+  }
   const triggerTouched =
     context.kind === "create"
       ? job.trigger !== undefined
@@ -196,7 +219,7 @@ function validateFullJob(
 }
 /** Creates a normalized cron job row from public add input and computes its initial schedule. */
 export function createJob(
-  state: CronServiceState,
+  state: { deps: Pick<CronServiceState["deps"], "nowMs" | "cronConfig" | "defaultAgentId"> },
   input: CronJobCreate,
   opts?: DeliveryValidationOptions & {
     scheduledToolPolicy?: CronScheduledToolPolicy;
@@ -225,6 +248,8 @@ export function createJob(
   delete initialState.scheduleActivatedAtMs;
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
+  delete initialState.failureRecovery;
+  delete initialState.commandRecoveryOrigin;
   assertCronJobStateTimestamps(initialState);
   const job: CronStoredJob = {
     id,
@@ -257,6 +282,7 @@ export function createJob(
         : structuredClone(input.payload),
     delivery: resolveInitialCronDelivery(input),
     failureAlert: input.failureAlert,
+    ...(input.failureRecovery ? { failureRecovery: structuredClone(input.failureRecovery) } : {}),
     ...(input.trigger ? { trigger: structuredClone(input.trigger) } : {}),
     state: {
       ...initialState,
@@ -392,6 +418,13 @@ export function applyJobPatch(
   if ("failureAlert" in patch) {
     job.failureAlert = mergeCronFailureAlert(job.failureAlert, patch.failureAlert);
   }
+  if ("failureRecovery" in patch) {
+    if (patch.failureRecovery) {
+      job.failureRecovery = structuredClone(patch.failureRecovery);
+    } else {
+      delete job.failureRecovery;
+    }
+  }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {
     assertFailureDestinationSupport(job);
     // Retargeting may discard inherited announce routes, but must not silently
@@ -420,6 +453,8 @@ export function applyJobPatch(
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
+    delete statePatch.failureRecovery;
+    delete statePatch.commandRecoveryOrigin;
     assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };
   }
@@ -492,6 +527,9 @@ export function applyDeclarativeJobSpec(
     nowMs: opts.nowMs,
     fallbackAnchorMs: job.createdAtMs,
   });
+  if (input.failureRecovery !== undefined) {
+    job.failureRecovery = structuredClone(input.failureRecovery);
+  }
   if (input.pacing !== undefined) {
     job.pacing = structuredClone(input.pacing);
   } else {

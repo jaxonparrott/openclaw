@@ -1,12 +1,14 @@
 export const HEARTBEAT_TASK_DECLARATION_PREFIX = "heartbeat-task:";
 export const HEARTBEAT_DECLARATION_PREFIX = "heartbeat:";
 export const SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX = "skill-collection-review:";
+export const COMMAND_RECOVERY_DECLARATION_PREFIX = "command-recovery:";
 
 /** Reserved creation namespaces, including Doctor-imported operator tasks. */
 const SYSTEM_OWNED_DECLARATION_PREFIXES = [
   HEARTBEAT_TASK_DECLARATION_PREFIX,
   HEARTBEAT_DECLARATION_PREFIX,
   SKILL_COLLECTION_REVIEW_DECLARATION_PREFIX,
+  COMMAND_RECOVERY_DECLARATION_PREFIX,
 ];
 
 export function systemOwnedDeclarationKeyNamespace(

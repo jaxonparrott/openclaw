@@ -612,6 +612,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const patch: CronJobPatch = normalizedPatch;
+    if (callerScope && !callerScope.manageAll && "failureRecovery" in patch) {
+      respondInvalidCronParams(respond, "cron.update", "failure recovery is operator-only");
+      return;
+    }
     const cfg = context.getRuntimeConfig();
     const currentJob = await context.cron.readJob(jobId);
     if (
