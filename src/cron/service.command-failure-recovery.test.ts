@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   loseFirstCronMutationReply,
+  observeCronStoreCommits,
   terminateFirstCronMutationBeforeCommit,
 } from "../../test/helpers/cron/runtime-mutation.js";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -8,7 +9,10 @@ import {
   cronCreateMatchesCallerScope,
   cronJobMatchesCallerScope,
 } from "../gateway/server-methods/cron-caller-scope.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { toPublicCronJob } from "./public-job.js";
@@ -22,10 +26,15 @@ import {
   observeCronRecoveryForTest,
   recoverCronRunForTest,
 } from "./service/run-recovery.test-support.js";
+import * as runtimeMutation from "./service/runtime-mutation.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { recordCronRun } from "./store/run-history.js";
-import { releaseLocalCronRunReceiptOwnership } from "./store/run-receipt-store.js";
+import {
+  finishCronRunReceiptAsync,
+  releaseLocalCronRunReceiptOwnership,
+} from "./store/run-receipt-store.js";
+import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
 import type { CronJobCreate } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -53,7 +62,7 @@ function input(): CronJobCreate {
   };
 }
 
-async function fixture() {
+async function fixture(automatic = false) {
   const { storePath } = await makeStorePath();
   const command = vi.fn<NonNullable<ConstructorParameters<typeof CronService>[0]["runCommandJob"]>>(
     async () => ({
@@ -69,7 +78,7 @@ async function fixture() {
   const create = () =>
     new CronService({
       storePath,
-      scheduler: createTestGatewayScheduler(),
+      scheduler: createTestGatewayScheduler(automatic ? "fake-timers" : undefined),
       nowMs: () => Date.now(),
       cronEnabled: true,
       log: logger,
@@ -85,6 +94,226 @@ async function fixture() {
 }
 
 describe("native command failure recovery", () => {
+  it("does not rearm while the prior child's exact receipt is still running", async () => {
+    const box = await fixture();
+    await box.cron.update(box.job.id, {
+      failureRecovery: { ...input().failureRecovery!, timeoutSeconds: 1 },
+    });
+    await box.cron.run(box.job.id, "force");
+    const childId = box.cron.getJob(box.job.id)!.state.failureRecovery!.jobId;
+    const entered = createDeferred();
+    const child = createDeferred<{ status: "ok" }>();
+    box.agent.mockImplementationOnce(({ onExecutionStarted }) => {
+      onExecutionStarted?.();
+      entered.resolve();
+      return child.promise;
+    });
+    const finishes: Promise<void>[] = [];
+    const finishStarted = createDeferred();
+    const execute = runtimeMutation.runCronRuntimeMutation;
+    const mutation = vi
+      .spyOn(runtimeMutation, "runCronRuntimeMutation")
+      .mockImplementation((params) => {
+        const finished = execute(params);
+        if (params.type === "cron.finishReceipt") {
+          finishes.push(finished);
+          finishStarted.resolve();
+        }
+        return finished;
+      });
+    const run = box.cron.run(childId, "force");
+    try {
+      await entered.promise;
+      await vi.advanceTimersByTimeAsync(1_000);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await run;
+      expect(
+        inspectActiveCronRunReceipt({ storePath: box.storePath, jobId: childId }),
+      ).toBeDefined();
+      expect(box.cron.getJob(childId)!.state.runningAtMs).toBeUndefined();
+      expect(box.cron.getJob(childId)!.enabled).toBe(false);
+      box.command.mockResolvedValueOnce({ status: "ok" });
+      await box.cron.run(box.job.id, "force");
+      expect(box.cron.getJob(box.job.id)!.state.failureRecovery!.recoveredAtMs).toBeDefined();
+      await box.cron.run(box.job.id, "force");
+      expect((await loadCronStore(box.storePath)).jobs).toHaveLength(2);
+      child.resolve({ status: "ok" });
+      await finishStarted.promise;
+      await Promise.allSettled(finishes);
+      expect(
+        inspectActiveCronRunReceipt({ storePath: box.storePath, jobId: childId }),
+      ).toBeUndefined();
+      await box.cron.run(box.job.id, "force");
+      expect((await loadCronStore(box.storePath)).jobs).toHaveLength(3);
+    } finally {
+      child.resolve({ status: "ok" });
+      await run;
+      await finishStarted.promise;
+      await Promise.allSettled(finishes);
+      mutation.mockRestore();
+      box.cron.stop();
+    }
+  });
+
+  it.each(["error", "lost-ack", "rollback", "stale-policy", "disabled"] as const)(
+    "waits for command settlement before recovery admission: %s",
+    async (transition) => {
+      const box = await fixture(true);
+      await box.cron.update(box.job.id, {
+        payload: { kind: "command", argv: ["fixture"], timeoutSeconds: 1 },
+      });
+      const admitsRecovery =
+        transition === "error" || transition === "lost-ack" || transition === "rollback";
+      if (admitsRecovery) {
+        await box.cron.start();
+      }
+      const entered = createDeferred();
+      const command = createDeferred<{ status: "error"; error: string } | { status: "ok" }>();
+      box.command.mockImplementationOnce(() => {
+        entered.resolve();
+        return command.promise;
+      });
+      const finishes: Promise<void>[] = [];
+      const finishStarted = createDeferred();
+      const retryStarted = createDeferred();
+      let lost: ReturnType<typeof loseFirstCronMutationReply> | undefined;
+      let publications = 0;
+      let stopObserving: (() => void) | undefined;
+      const execute = runtimeMutation.runCronRuntimeMutation;
+      const mutation = vi
+        .spyOn(runtimeMutation, "runCronRuntimeMutation")
+        .mockImplementation((params) => {
+          const finished = execute(params);
+          if (params.type === "cron.finishReceipt") {
+            finishes.push(finished);
+            finishStarted.resolve();
+            if (finishes.length === 2) {
+              retryStarted.resolve();
+            }
+          }
+          return finished;
+        });
+      const run = box.cron.run(box.job.id, "force");
+      try {
+        await entered.promise;
+        const receipt = inspectActiveCronRunReceipt({
+          storePath: box.storePath,
+          jobId: box.job.id,
+        })!;
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(20_000);
+        await run;
+        expect(
+          inspectActiveCronRunReceipt({ storePath: box.storePath, jobId: box.job.id })?.receiptId,
+        ).toBe(receipt.receiptId);
+        expect((await loadCronStore(box.storePath)).jobs).toHaveLength(1);
+        expect(box.cron.getJob(box.job.id)!.state.failureRecovery).toBeUndefined();
+        expect(box.agent).not.toHaveBeenCalled();
+        expect(readCronRunRecordsForTests(box.job.id)[0]?.detail).toMatchObject({
+          completionStatus: "failed",
+        });
+        if (transition === "stale-policy") {
+          await box.cron.update(box.job.id, {
+            failureRecovery: { ...input().failureRecovery!, message: "New policy" },
+          });
+        }
+        if (transition === "disabled") {
+          await box.cron.update(
+            box.job.id,
+            { enabled: false },
+            {
+              preserveRunning: true,
+              expectedConfigRevision: resolveCronJobConfigRevision(box.cron.getJob(box.job.id)!),
+            },
+          );
+        }
+        stopObserving = observeCronStoreCommits(box.storePath, () => {
+          publications += 1;
+        });
+        if (transition === "lost-ack") {
+          lost = loseFirstCronMutationReply("cron.finishReceipt");
+        }
+        if (transition === "rollback") {
+          openOpenClawStateDatabase().db.exec(`
+          CREATE TRIGGER reject_recovery_child AFTER INSERT ON cron_jobs
+          WHEN NEW.job_id != '${box.job.id}'
+          BEGIN SELECT RAISE(ABORT, 'recovery child temporarily unavailable'); END;
+        `);
+        }
+        command.resolve(
+          transition === "error"
+            ? { status: "ok" }
+            : { status: "error", error: "late underlying failure" },
+        );
+        await finishStarted.promise;
+        if (transition === "rollback") {
+          expect((await Promise.allSettled(finishes))[0]?.status).toBe("rejected");
+          expect(
+            inspectActiveCronRunReceipt({ storePath: box.storePath, jobId: box.job.id })?.receiptId,
+          ).toBe(receipt.receiptId);
+          expect((await loadCronStore(box.storePath)).jobs).toHaveLength(1);
+          expect(publications).toBe(0);
+          openOpenClawStateDatabase().db.exec("DROP TRIGGER reject_recovery_child");
+          await vi.advanceTimersByTimeAsync(1_000);
+          await retryStarted.promise;
+        }
+        const settled = await Promise.allSettled(finishes);
+        expect(settled.at(-1)?.status === "fulfilled" || lost !== undefined).toBe(true);
+        expect(
+          inspectActiveCronRunReceipt({ storePath: box.storePath, jobId: box.job.id }),
+        ).toBeUndefined();
+        const store = await loadCronStore(box.storePath);
+        expect(store.jobs).toHaveLength(admitsRecovery ? 2 : 1);
+        const parent = store.jobs.find((job) => job.id === box.job.id)!;
+        expect(parent.state.lastRunStatus).toBe("error");
+        expect(parent.state.lastError).toBe("cron: job execution timed out");
+        if (lost) {
+          expect(lost.wasDropped()).toBe(true);
+        }
+        if (admitsRecovery) {
+          expect(publications).toBeGreaterThan(0);
+        }
+        if (admitsRecovery) {
+          const child = store.jobs.find((job) => job.state.commandRecoveryOrigin)!;
+          expect(child.state.commandRecoveryOrigin?.failedReceiptId).toBe(receipt.receiptId);
+          await finishCronRunReceiptAsync({
+            handle: receipt,
+            status: "error",
+            finishedAtMs: Date.now(),
+          });
+          expect((await loadCronStore(box.storePath)).jobs).toHaveLength(2);
+          const agentStarted = createDeferred();
+          box.agent.mockImplementationOnce(async () => {
+            agentStarted.resolve();
+            return { status: "ok" };
+          });
+          // Existing native timer/revision refresh must discover the late child.
+          // No force-run or added wake-up creates its first execution.
+          await vi.advanceTimersByTimeAsync(60_000);
+          await agentStarted.promise;
+          expect(box.agent).toHaveBeenCalledOnce();
+          box.cron.stop();
+          const restarted = box.create();
+          try {
+            await restarted.run(child.id, "force");
+            expect(box.agent).toHaveBeenCalledOnce();
+          } finally {
+            restarted.stop();
+          }
+        }
+      } finally {
+        command.resolve({ status: "error", error: "cleanup" });
+        await run;
+        await Promise.allSettled(finishes);
+        await lost?.close();
+        stopObserving?.();
+        openOpenClawStateDatabase().db.exec("DROP TRIGGER IF EXISTS reject_recovery_child");
+        mutation.mockRestore();
+        box.cron.stop();
+      }
+    },
+  );
+
   it("does not verify an incident with success from a superseded command definition", async () => {
     const box = await fixture();
     await box.cron.run(box.job.id, "force");
@@ -245,8 +474,9 @@ describe("native command failure recovery", () => {
         const record = readCronRunRecordsForTests(box.job.id).find(
           (current) => current.status === "succeeded",
         )!;
-        if (!record.detail || typeof record.detail !== "object" || Array.isArray(record.detail))
+        if (!record.detail || typeof record.detail !== "object" || Array.isArray(record.detail)) {
           throw new Error("missing native history detail");
+        }
         const detail = { ...record.detail };
         delete detail.completionStatus;
         await recordCronRun({
@@ -264,8 +494,11 @@ describe("native command failure recovery", () => {
       const parent = restarted.getJob(box.job.id)!;
       expect(parent.state.lastRunStatus).toBe(status);
       expect((await loadCronStore(box.storePath)).jobs).toHaveLength(2);
-      if (status === "ok") expect(parent.state.failureRecovery!.recoveredAtMs).toBeDefined();
-      else expect(parent.state.lastError).toBe("PRIVATE_ERROR");
+      if (status === "ok") {
+        expect(parent.state.failureRecovery!.recoveredAtMs).toBeDefined();
+      } else {
+        expect(parent.state.lastError).toBe("PRIVATE_ERROR");
+      }
       restarted.stop();
     },
   );
@@ -292,7 +525,9 @@ describe("native command failure recovery", () => {
       timeoutSeconds: 30,
       toolsAllow: ["read", "write"],
     });
-    if (child.payload.kind !== "agentTurn") throw new Error("missing agent recovery");
+    if (child.payload.kind !== "agentTurn") {
+      throw new Error("missing agent recovery");
+    }
     expect(child.payload.message).not.toMatch(
       /PRIVATE_ARGV|PRIVATE_ENV|PRIVATE_ERROR|private command label/,
     );

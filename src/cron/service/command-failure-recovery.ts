@@ -19,37 +19,39 @@ export function planCommandFailureRecovery(
     runReceipt?: Pick<CronRunReceiptHandle, "receiptId" | "configRevision">;
   },
   jobs: ReadonlyMap<string, CronJob>,
+  previousChildHasActiveReceipt: boolean,
 ): CronJob | undefined {
   if (job.payload.kind !== "command" || job.state.commandRecoveryOrigin) {
-    return;
+    return undefined;
   }
   const parentConfigRevision = resolveCronJobConfigRevision(job);
   if (parentConfigRevision !== outcome.runReceipt?.configRevision) {
-    return;
+    return undefined;
   }
   const previous = job.state.failureRecovery;
   if (outcome.status === "ok" && outcome.completionStatus !== "failed") {
     if (previous) {
       previous.recoveredAtMs = outcome.endedAt;
     }
-    return;
+    return undefined;
   }
   const policy = job.failureRecovery;
   const receiptId = outcome.runReceipt?.receiptId;
   if (outcome.status !== "error" || !policy || !receiptId || !job.enabled) {
-    return;
+    return undefined;
   }
   if (previous) {
     const child = jobs.get(previous.jobId);
     // Missing retained evidence is uncertainty, not permission for another attempt.
     if (
       previous.recoveredAtMs === undefined ||
+      previousChildHasActiveReceipt ||
       !child ||
       child.enabled ||
       child.state.queuedAtMs !== undefined ||
       child.state.runningAtMs !== undefined
     ) {
-      return;
+      return undefined;
     }
   }
   const identity = sha256Hex(JSON.stringify([job.id, receiptId]));
@@ -90,7 +92,7 @@ export function planCommandFailureRecovery(
       { jobId: job.id, receiptId, error: String(error) },
       "cron: command failure recovery could not be admitted",
     );
-    return;
+    return undefined;
   }
   child.state.commandRecoveryOrigin = {
     jobId: job.id,

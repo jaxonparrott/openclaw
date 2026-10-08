@@ -186,7 +186,7 @@ export async function finalizeCompletedCronRunOutcomes(
         jobIds: finalizedOutcomes.map((outcome) => outcome.jobId),
         receipts,
         markers: finalizedOutcomes.map((outcome) => outcome.activeJobMarker),
-        mutate: ({ jobs, retiredTriggerReceiptIds }) => {
+        mutate: ({ jobs, retiredTriggerReceiptIds, deferredReceiptIds, activeReceiptJobIds }) => {
           const upsertedJobs: CronJob[] = [];
           const createdJobs: CronJob[] = [];
           const removedJobs: CronJob[] = [];
@@ -208,7 +208,16 @@ export async function finalizeCompletedCronRunOutcomes(
               removedJobs.push(job);
             } else {
               upsertedJobs.push(job);
-              const recovery = planCommandFailureRecovery(state, job, outcome, jobs);
+              const recovery =
+                outcome.runReceipt && deferredReceiptIds.has(outcome.runReceipt.receiptId)
+                  ? undefined
+                  : planCommandFailureRecovery(
+                      state,
+                      job,
+                      outcome,
+                      jobs,
+                      activeReceiptJobIds.has(job.state.failureRecovery?.jobId ?? ""),
+                    );
               if (recovery) {
                 createdJobs.push(recovery);
               }
