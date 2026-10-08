@@ -22,7 +22,13 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
 import {
+  getActiveGatewayRootWorkCount,
+  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewaySuspendAdmission,
+} from "../process/gateway-work-admission.js";
+import {
   activateMcpLoopbackClientGrantCapture,
+  deactivateMcpLoopbackClientGrantCapture,
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
   revokeAttachGrant,
@@ -30,6 +36,11 @@ import {
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import {
+  createRequestGatewayMethodRegistry,
+  runWithGatewayRequestEnvelope,
+} from "./server-methods.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 
 const completed = { content: [{ type: "text", text: "authority inspected" }] };
 let toolCallerIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
@@ -155,6 +166,100 @@ describe("MCP HTTP session archive authority", () => {
         revokeMcpLoopbackClientGrant(grantToken);
       }
       admission.close();
+    }
+  });
+
+  it("continues an admitted CLI turn's fresh HTTP native RPC during drain, then quiesces", async () => {
+    const root = tryBeginGatewayRootWorkAdmission("agent:cli-drain");
+    if (!root) throw new Error("expected accepting admission");
+    const runId = "cli-drain-run";
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef(runId),
+      facts: {
+        runId,
+        agentId: "main",
+        ingress: { kind: "system", boundary: "cli-drain-test", state: "present" },
+      },
+    });
+    let token: string | undefined;
+    let suspension: ReturnType<typeof tryBeginGatewaySuspendAdmission> = null;
+    try {
+      const admittedRunContext = await admission.admit("gateway");
+      const captureKey = "cli-drain-capture";
+      await root.run(async () => {
+        const grant = mintMcpLoopbackClientGrant({
+          runtimeOwnerToken: activeRuntime().ownerToken,
+          context: { sessionKey: "agent:main:cli-drain", agentId: "main", runId },
+          admittedRunContext,
+        });
+        token = grant.token;
+        expect(
+          activateMcpLoopbackClientGrantCapture({
+            token,
+            runtimeOwnerToken: activeRuntime().ownerToken,
+            captureKey,
+          }),
+        ).not.toBe(false);
+      });
+      execute.mockImplementation(async () =>
+        runWithGatewayRequestEnvelope("cron.list", null, async () => completed, {
+          context: { logGateway: { warn: vi.fn() } } as unknown as GatewayRequestContext,
+          isWebchatConnect: () => false,
+          methodRegistry: createRequestGatewayMethodRegistry(),
+          requestParams: {},
+          reject: (error) => {
+            throw new Error(error.message);
+          },
+        }),
+      );
+      suspension = tryBeginGatewaySuspendAdmission(() => {});
+      expect(suspension?.drain()).toBe(true);
+      const headers = { "x-openclaw-cli-capture-key": captureKey };
+      expect(await sendRequest(token!, "tools/call", headers)).toMatchObject({
+        result: { ...completed, isError: false },
+      });
+      expect(
+        await sendRequest(activeRuntime().ownerToken, "tools/call", {
+          "x-session-key": "agent:main:cli-drain-new-root",
+        }),
+      ).toMatchObject({
+        result: { isError: true },
+      });
+      // The admitted grant retains its originating root after the parent callback ends.
+      root.release();
+      expect(getActiveGatewayRootWorkCount()).toBe(1);
+      expect(
+        deactivateMcpLoopbackClientGrantCapture({
+          token: token!,
+          runtimeOwnerToken: activeRuntime().ownerToken,
+          captureKey,
+        }),
+      ).toBe(true);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      revokeMcpLoopbackClientGrant(token!);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      const denied = await fetch(`http://127.0.0.1:${activeRuntime().port}/mcp`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "content-type": "application/json",
+          ...headers,
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      expect(denied.status).toBe(401);
+      const unauthorized = await fetch(`http://127.0.0.1:${activeRuntime().port}/mcp`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      });
+      expect(unauthorized.status).toBe(401);
+    } finally {
+      if (token) revokeMcpLoopbackClientGrant(token);
+      root.release();
+      admission.close();
+      suspension?.release();
     }
   });
 
