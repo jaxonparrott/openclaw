@@ -30,6 +30,8 @@ export async function finalizeCronRuntimeRows<Value>(params: {
   mutate: (facts: {
     jobs: ReadonlyMap<string, CronJob>;
     retiredTriggerReceiptIds: ReadonlySet<string>;
+    deferredReceiptIds: ReadonlySet<string>;
+    activeReceiptJobIds: ReadonlySet<string>;
   }) => {
     jobs: CronJob[];
     createdJobs?: CronJob[];
@@ -124,8 +126,14 @@ export async function finalizeCronRuntimeRows<Value>(params: {
         assertCurrent();
         const mutation = params.mutate({
           jobs: new Map(facts.jobs.map((job) => [job.id, job])),
+          activeReceiptJobIds: new Set(facts.activeReceiptJobIds),
           retiredTriggerReceiptIds: new Set(
             facts.receipts.filter((fact) => fact.triggerStateRetired).map((fact) => fact.receiptId),
+          ),
+          deferredReceiptIds: new Set(
+            retained
+              .filter(({ settlement }) => settlement.pending)
+              .map(({ receipt }) => receipt.terminal.handle.receiptId),
           ),
         });
         assertCurrent();

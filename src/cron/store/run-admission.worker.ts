@@ -6,6 +6,7 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
+import { planCommandFailureRecovery } from "../service/command-failure-recovery.js";
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJobPolicyContext } from "../service/state.js";
@@ -28,6 +29,8 @@ import {
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
   ensureCronRunReceiptSchema,
+  exactCronRunReceiptMatches,
+  findActiveCronRunReceiptInDatabase,
   finishCronRunReceiptInDatabase,
 } from "./run-receipt-store.js";
 import { isCronRunTriggerStateRetiredInDatabase } from "./run-receipt-trigger-state.js";
@@ -389,13 +392,67 @@ export function finishCronReceiptInWorker(
 ) {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      prepareCronRuntimeMutation("cron.finishReceipt", input.nonce, {});
-      finishCronRunReceiptInDatabase({
+      const preparation = prepareCronRuntimeMutation("cron.finishReceipt", input.nonce, {});
+      const owned = exactCronRunReceiptMatches(
+        findActiveCronRunReceiptInDatabase({
+          database: db,
+          storePath: input.storeKey,
+          jobId: input.terminal.handle.jobId,
+        }),
+        input.terminal.handle,
+      );
+      const receipt = finishCronRunReceiptInDatabase({
         database: db,
         receiptSchema: prepareCronRunReceiptWriteSchema(db),
         ...input.terminal,
       });
-      return retainCronRuntimeMutationOutcome("cron.finishReceipt", db, input.nonce, {});
+      const outcome: CronRuntimeMutationContracts["cron.finishReceipt"]["outcome"] = {
+        changed: false,
+        logs: [],
+      };
+      // Only the exact running→terminal transition owns late recovery admission.
+      // Repeated finishes cannot reopen a previously verified incident.
+      if (owned && receipt && (receipt.status === "error" || receipt.status === "ok")) {
+        const { jobs } = loadRuntimeRows(db, input.storeKey, [receipt.jobId]);
+        const parent = jobs.get(receipt.jobId);
+        if (parent?.payload.kind === "command") {
+          if (parent.state.failureRecovery) {
+            const related = loadRuntimeRows(db, input.storeKey, [
+              parent.state.failureRecovery.jobId,
+            ]);
+            for (const [id, job] of related.jobs) {
+              jobs.set(id, job);
+            }
+          }
+          const before = JSON.stringify(parent.state.failureRecovery);
+          const child = planCommandFailureRecovery(
+            {
+              deps: { nowMs: () => preparation.nowMs, log: createCronMutationLogger(outcome.logs) },
+            },
+            parent,
+            {
+              status: receipt.status,
+              endedAt: receipt.finishedAtMs ?? input.terminal.finishedAtMs,
+              runReceipt: receipt,
+            },
+            jobs,
+            parent.state.failureRecovery !== undefined &&
+              findActiveCronRunReceiptInDatabase({
+                database: db,
+                storePath: input.storeKey,
+                jobId: parent.state.failureRecovery.jobId,
+              }) !== undefined,
+          );
+          if (child) {
+            upsertCronJobRow(db, input.storeKey, child, parent.createdAtMs);
+          }
+          if (before !== JSON.stringify(parent.state.failureRecovery)) {
+            updateCronRuntimeRow(db, input.storeKey, parent, parent.enabled);
+            outcome.changed = true;
+          }
+        }
+      }
+      return retainCronRuntimeMutationOutcome("cron.finishReceipt", db, input.nonce, outcome);
     },
     { database, path: database.path, env: getSqliteWorkerStateContext().environment },
     { operationLabel: "cron.run-receipt.finish" },
@@ -423,6 +480,14 @@ export function finalizeCronRunsInWorker(
           const receiptSchema = prepareCronRunReceiptWriteSchema(db);
           const preparation = prepareCronRuntimeMutation("cron.finalizeRuns", input.nonce, {
             jobs: [...jobs.values()],
+            activeReceiptJobIds: relatedIds.filter(
+              (jobId) =>
+                findActiveCronRunReceiptInDatabase({
+                  database: db,
+                  storePath: input.storeKey,
+                  jobId,
+                }) !== undefined,
+            ),
             receipts: input.receipts.map(({ terminal }) => ({
               receiptId: terminal.handle.receiptId,
               deletionBlocked: isAgentDeletionBlocked(terminal.handle.agentId, {}, db),
