@@ -202,6 +202,15 @@ When the run deadline stops a command, run history retains its captured output a
 
 #### Command failure recovery
 
+For command maintenance, an authenticated operator can call `cron.update` with
+`preserveRunning: true`, `expectedConfigRevision` and the exact patch
+`{"enabled":false}`. This disables future recurrence and retires queued admission
+without cancelling an already-admitted command. Its original result remains in
+native run history, and finalization cannot re-enable the disabled definition.
+The option applies only to command jobs and is not stored on the job. Ordinary
+disable continues to cancel active work. Explicit operator force-run semantics
+remain unchanged; restoring enablement selects the next native schedule slot.
+
 An authenticated operator can opt a recurring `command` job into one bounded
 recovery turn through `cron.add` or `cron.update`:
 

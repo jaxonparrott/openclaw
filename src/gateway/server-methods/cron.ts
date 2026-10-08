@@ -585,8 +585,23 @@ export const cronHandlers: GatewayRequestHandlers = {
       jobId?: string;
       patch: Record<string, unknown>;
       expectedConfigRevision?: string;
+      preserveRunning?: true;
     };
     const callerScope = readCronCallerScope(client);
+    if (
+      p.preserveRunning &&
+      ((callerScope && !callerScope.manageAll) ||
+        !p.expectedConfigRevision ||
+        Object.keys(p.patch).length !== 1 ||
+        p.patch.enabled !== false)
+    ) {
+      respondInvalidCronParams(
+        respond,
+        "cron.update",
+        "preserveRunning requires an operator's exact revision-checked command disable",
+      );
+      return;
+    }
     let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
     let assertCapturedAuthorityCurrent: (() => void) | undefined;
     try {
@@ -686,8 +701,12 @@ export const cronHandlers: GatewayRequestHandlers = {
       touchesToolRuntime ||
       commitGuard ||
       captureRuntimeAuthority ||
+      p.preserveRunning ||
       callerScope?.toolsAllowProvenance
         ? {
+            ...(p.preserveRunning
+              ? { preserveRunning: true as const, expectedConfigRevision: p.expectedConfigRevision }
+              : {}),
             // Management access preserves the job's existing execution ceiling.
             ...(touchesToolRuntime
               ? {
