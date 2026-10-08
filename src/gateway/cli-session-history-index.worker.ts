@@ -183,6 +183,7 @@ type HistoryRow = {
   image_mentions: number;
   metadata: string | null;
   consumed: number;
+  receipt_text: number;
   ordinal: number | null;
 };
 type HistoryDatabase = {
@@ -214,7 +215,7 @@ export class CliSessionHistoryIndex {
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
       text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
-      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL,
+      image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL, receipt_text INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
     this.database
@@ -223,9 +224,9 @@ export class CliSessionHistoryIndex {
       CREATE TABLE floors (role TEXT NOT NULL, text TEXT NOT NULL, minimum_order INTEGER NOT NULL, PRIMARY KEY(role,text));
       CREATE TABLE assistant_text_receipts (external_key TEXT PRIMARY KEY, text_sha256 TEXT NOT NULL);
       CREATE INDEX match_external ON messages(external_key, id);
-      CREATE INDEX match_text ON messages(role, text, consumed, id);
-      CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
-      CREATE INDEX match_undated_text ON messages(role, text, consumed, id) WHERE timestamp IS NULL;
+      CREATE INDEX match_text ON messages(role, text, consumed, receipt_text, id);
+      CREATE INDEX match_timed_text ON messages(role, text, consumed, receipt_text, id) WHERE timestamp IS NOT NULL;
+      CREATE INDEX match_undated_text ON messages(role, text, consumed, receipt_text, id) WHERE timestamp IS NULL;
       CREATE INDEX match_image ON messages(image_key, consumed, id);
       CREATE INDEX message_identity ON messages(message_id);
       CREATE INDEX local_sequence ON messages(local_seq);
@@ -305,6 +306,7 @@ export class CliSessionHistoryIndex {
         image_mentions: parameter((row) => row.image_mentions),
         metadata: parameter((row) => row.metadata),
         consumed: parameter((row) => row.consumed),
+        receipt_text: parameter((row) => row.receipt_text),
         ordinal: parameter((row) => row.ordinal),
       });
       return table === "messages"
@@ -356,25 +358,20 @@ export class CliSessionHistoryIndex {
       image_mentions: comparable.hasCliImageMentions ? 1 : 0,
       metadata: meta ? JSON.stringify(meta) : null,
       consumed: 0,
+      receipt_text: 0,
       ordinal: null,
     };
   }
 
   appendLocal(messages: readonly { message: unknown; seq: number }[]): void {
     for (let offset = 0; offset < messages.length; offset += INDEX_INSERT_BATCH_ROWS) {
-      const rows = messages
-        .slice(offset, offset + INDEX_INSERT_BATCH_ROWS)
-        .map(({ message, seq }) => {
+      runSqliteImmediateTransactionSync(this.database, () => {
+        for (const { message, seq } of messages.slice(offset, offset + INDEX_INSERT_BATCH_ROWS)) {
           const id = seq - 1;
           this.nextLocal = Math.max(this.nextLocal, id + 1);
-          return this.row(message, id, seq);
-        });
-      runSqliteImmediateTransactionSync(this.database, () => {
-        for (const row of rows) {
+          const row = this.row(message, id, seq);
+          row.receipt_text = this.assistantTextReceipts.capture(message) ? 1 : 0;
           this.insertMessage(row);
-        }
-        for (const { message } of messages.slice(offset, offset + INDEX_INSERT_BATCH_ROWS)) {
-          this.assistantTextReceipts.capture(message);
         }
       });
     }
@@ -472,6 +469,8 @@ export class CliSessionHistoryIndex {
               parameter((row) => row.text),
             )
             .where("consumed", "=", 0)
+            // Receipt-bearing canonical text admits only its scoped, verified identities.
+            .where("receipt_text", "=", 0)
             .where(
               "id",
               ">=",
@@ -626,6 +625,7 @@ export class CliSessionHistoryIndex {
               payload: null,
               import_ref: imported.id,
               consumed: 1,
+              receipt_text: 0,
             });
             this.expanded = true;
           }

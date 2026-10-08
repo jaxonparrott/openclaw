@@ -64,7 +64,7 @@ export function createCliAssistantTextReceipts(database: DatabaseSync) {
         ),
   );
   return {
-    capture(message: unknown): void {
+    capture(message: unknown): boolean {
       const record = asOptionalRecord(message);
       const receipt = asOptionalRecord(
         asOptionalRecord(record?.["__openclaw"])?.cliAssistantTextReceipt,
@@ -77,16 +77,19 @@ export function createCliAssistantTextReceipts(database: DatabaseSync) {
         !cliSessionId ||
         !Array.isArray(receipt?.messages)
       ) {
-        return;
+        return false;
       }
+      let admitted = false;
       for (const entry of receipt.messages) {
         const identity = asOptionalRecord(entry);
         const externalId = normalizeOptionalString(identity?.externalId);
         const textSha256 = normalizeOptionalString(identity?.textSha256);
         if (externalId && textSha256 && /^[a-f0-9]{64}$/.test(textSha256)) {
           insert({ externalKey: JSON.stringify([externalId, provider, cliSessionId]), textSha256 });
+          admitted = true;
         }
       }
+      return admitted;
     },
     project(imported: {
       role: string | null;

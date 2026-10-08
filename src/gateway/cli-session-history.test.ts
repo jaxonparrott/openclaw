@@ -83,6 +83,63 @@ function writeClaudeEntries(filePath: string, entries: readonly Record<string, u
 }
 
 describe("cli session history", () => {
+  it.each([
+    ["distinct UUID", cliMeta("final-2")],
+    ["other session", cliMeta("final-1", "session-2")],
+    ["other provider", { ...cliMeta("final-1"), importedFrom: "other-cli" }],
+    ["missing identity", {}],
+  ])(
+    "retains a distinct identical final turn beside a receipt-owned canonical reply (%s)",
+    (_label, metadata) => {
+      const text = "Verified answer.";
+      const canonical = {
+        role: "assistant",
+        content: text,
+        __openclaw: {
+          id: "canonical-final",
+          cliAssistantTextReceipt: {
+            provider: "claude-cli",
+            cliSessionId: "session-1",
+            messages: [{ externalId: "final-1", textSha256: sha256Hex(text) }],
+          },
+        },
+      };
+      const covered = { role: "assistant", content: text, __openclaw: cliMeta("final-1") };
+      const distinct = { ...covered, __openclaw: metadata };
+      expect(
+        mergeImportedChatHistoryMessages({
+          localMessages: [canonical],
+          importedMessages: [covered, distinct],
+        }),
+      ).toEqual([canonical, distinct]);
+    },
+  );
+
+  it.each([
+    { label: "empty", messages: [] },
+    { label: "malformed", messages: [{ externalId: "final-1", textSha256: "invalid" }] },
+  ])("retains legacy text matching for an unadmitted receipt ($label)", ({ messages }) => {
+    const canonical = {
+      role: "assistant",
+      content: "Verified answer.",
+      __openclaw: {
+        cliAssistantTextReceipt: { provider: "claude-cli", cliSessionId: "session-1", messages },
+      },
+    };
+    const imported = {
+      role: "assistant",
+      content: canonical.content,
+      __openclaw: cliMeta("final-1"),
+    };
+    const merged = mergeImportedChatHistoryMessages({
+      localMessages: [canonical],
+      importedMessages: [imported],
+    });
+    expect(merged).toEqual([
+      { ...canonical, __openclaw: { ...canonical["__openclaw"], ...imported["__openclaw"] } },
+    ]);
+  });
+
   it("reconciles receipt-covered assistant text while retaining tools, thoughts, and other turns", () => {
     const provenance = { kind: "inter_session", sourceTool: "sessions_send" };
     const canonical = {
