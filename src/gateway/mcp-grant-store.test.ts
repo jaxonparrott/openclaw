@@ -58,7 +58,9 @@ describe("mcp-grant-store", () => {
   it("moves a warm CLI bearer without retaining the previous turn's root", async () => {
     const oldRoot = tryBeginGatewayRootWorkAdmission("old-cli-turn");
     const newRoot = tryBeginGatewayRootWorkAdmission("new-cli-turn");
-    if (!oldRoot || !newRoot) throw new Error("expected accepting admission");
+    if (!oldRoot || !newRoot) {
+      throw new Error("expected accepting admission");
+    }
     let target: string | undefined;
     let source: string | undefined;
     try {
@@ -66,7 +68,7 @@ describe("mcp-grant-store", () => {
         await oldRoot.run(async () =>
           mintMcpLoopbackClientGrant({
             runtimeOwnerToken: "runtime-one",
-            context: { sessionKey: "agent:main:warm" },
+            context: { sessionKey: "agent:main:warm", senderIsOwner: false },
           }),
         )
       ).token;
@@ -74,7 +76,7 @@ describe("mcp-grant-store", () => {
         await newRoot.run(async () =>
           mintMcpLoopbackClientGrant({
             runtimeOwnerToken: "runtime-one",
-            context: { sessionKey: "agent:main:warm" },
+            context: { sessionKey: "agent:main:warm", senderIsOwner: false },
           }),
         )
       ).token;
@@ -93,8 +95,12 @@ describe("mcp-grant-store", () => {
       expect(revokeMcpLoopbackClientGrant(target)).toBe(true);
       expect(getActiveGatewayRootWorkCount()).toBe(0);
     } finally {
-      if (target) revokeMcpLoopbackClientGrant(target);
-      if (source) revokeMcpLoopbackClientGrant(source);
+      if (target) {
+        revokeMcpLoopbackClientGrant(target);
+      }
+      if (source) {
+        revokeMcpLoopbackClientGrant(source);
+      }
       oldRoot.release();
       newRoot.release();
     }
@@ -102,14 +108,16 @@ describe("mcp-grant-store", () => {
 
   it("releases a completed warm capture and reacquires only its retry's current root", async () => {
     const root = tryBeginGatewayRootWorkAdmission("cli-capture");
-    if (!root) throw new Error("expected accepting admission");
+    if (!root) {
+      throw new Error("expected accepting admission");
+    }
     let token: string | undefined;
     try {
       token = (
         await root.run(async () =>
           mintMcpLoopbackClientGrant({
             runtimeOwnerToken: "runtime-one",
-            context: { sessionKey: "agent:main:warm" },
+            context: { sessionKey: "agent:main:warm", senderIsOwner: false },
           }),
         )
       ).token;
@@ -154,7 +162,9 @@ describe("mcp-grant-store", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(0);
       expect(revokeMcpLoopbackClientGrant(token)).toBe(true);
     } finally {
-      if (token) revokeMcpLoopbackClientGrant(token);
+      if (token) {
+        revokeMcpLoopbackClientGrant(token);
+      }
       root.release();
     }
   });

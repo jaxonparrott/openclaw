@@ -171,7 +171,9 @@ describe("MCP HTTP session archive authority", () => {
 
   it("continues an admitted CLI turn's fresh HTTP native RPC during drain, then quiesces", async () => {
     const root = tryBeginGatewayRootWorkAdmission("agent:cli-drain");
-    if (!root) throw new Error("expected accepting admission");
+    if (!root) {
+      throw new Error("expected accepting admission");
+    }
     const runId = "cli-drain-run";
     const admission = prepareAgentRunAdmission({
       cfg: {},
@@ -190,7 +192,12 @@ describe("MCP HTTP session archive authority", () => {
       await root.run(async () => {
         const grant = mintMcpLoopbackClientGrant({
           runtimeOwnerToken: activeRuntime().ownerToken,
-          context: { sessionKey: "agent:main:cli-drain", agentId: "main", runId },
+          context: {
+            sessionKey: "agent:main:cli-drain",
+            agentId: "main",
+            runId,
+            senderIsOwner: false,
+          },
           admittedRunContext,
         });
         token = grant.token;
@@ -256,7 +263,9 @@ describe("MCP HTTP session archive authority", () => {
       });
       expect(unauthorized.status).toBe(401);
     } finally {
-      if (token) revokeMcpLoopbackClientGrant(token);
+      if (token) {
+        revokeMcpLoopbackClientGrant(token);
+      }
       root.release();
       admission.close();
       suspension?.release();
