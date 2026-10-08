@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -94,29 +93,19 @@ export function createCliAssistantTextReceipts(database: DatabaseSync) {
     project(imported: {
       role: string | null;
       external_key: string | null;
+      source_text_sha256: string | null;
       id: number;
     }): { omitted: true } | { message: Record<string, unknown> } | undefined {
       const receipt =
         imported.role === "assistant" && imported.external_key
           ? read(imported.external_key)
           : undefined;
-      if (!receipt) {
+      if (!receipt || imported.source_text_sha256 !== receipt.text_sha256) {
         return undefined;
       }
       const payload = readImport(imported.id)?.payload;
       const record = payload ? asOptionalRecord(JSON.parse(payload)) : undefined;
-      const text =
-        typeof record?.content === "string"
-          ? record.content
-          : Array.isArray(record?.content)
-            ? record.content
-                .map((block) => {
-                  const value = asOptionalRecord(block);
-                  return value?.type === "text" && typeof value.text === "string" ? value.text : "";
-                })
-                .join("")
-            : "";
-      if (!record || sha256Hex(text) !== receipt.text_sha256) {
+      if (!record) {
         return undefined;
       }
       // The receipt covers text only. Preserve tool calls, thoughts, signatures,

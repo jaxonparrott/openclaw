@@ -144,6 +144,7 @@ type HistoryRow = {
   drift_text: string | null;
   timestamp: number | null;
   external_key: string | null;
+  source_text_sha256: string | null;
   image_key: string | null;
   image_mentions: number;
   metadata: string | null;
@@ -179,7 +180,7 @@ export class CliSessionHistoryIndex {
     this.db = getNodeSqliteKysely<HistoryDatabase>(this.database);
     // Only imported bodies live here; local rows retain their canonical sequence.
     const columns = `id INTEGER PRIMARY KEY, local_seq INTEGER, import_ref INTEGER, message_id TEXT, payload TEXT, bytes INTEGER NOT NULL, role TEXT,
-      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, image_key TEXT,
+      text TEXT, drift_text TEXT, timestamp REAL, external_key TEXT, source_text_sha256 TEXT, image_key TEXT,
       image_mentions INTEGER NOT NULL, metadata TEXT, consumed INTEGER NOT NULL, receipt_text INTEGER NOT NULL,
       ordinal INTEGER`;
     // sqlite-allow-raw -- Reconstructible temporary schema; no canonical writes or durability.
@@ -267,6 +268,7 @@ export class CliSessionHistoryIndex {
         drift_text: parameter((row) => row.drift_text),
         timestamp: parameter((row) => row.timestamp),
         external_key: parameter((row) => row.external_key),
+        source_text_sha256: parameter((row) => row.source_text_sha256),
         image_key: parameter((row) => row.image_key),
         image_mentions: parameter((row) => row.image_mentions),
         metadata: parameter((row) => row.metadata),
@@ -308,6 +310,7 @@ export class CliSessionHistoryIndex {
         comparable.driftNoteText === undefined ? null : JSON.stringify(comparable.driftNoteText),
       timestamp: asFiniteNumber(record?.timestamp) ?? null,
       external_key: resolveImportedExternalIdentityKey(meta) ?? null,
+      source_text_sha256: null,
       image_key:
         localSeq === undefined
           ? (comparable.cliImageTurnKey ?? null)
@@ -336,8 +339,9 @@ export class CliSessionHistoryIndex {
     }
   }
 
-  appendImported(message: unknown): void {
+  appendImported(message: unknown, sourceTextSha256?: string): void {
     const row = this.row(message, this.nextImport++);
+    row.source_text_sha256 = sourceTextSha256 ?? null;
     if (this.pendingImportBytes + row.bytes > INDEX_INSERT_BATCH_BYTES) {
       this.flushImports();
     }
@@ -508,6 +512,7 @@ export class CliSessionHistoryIndex {
             "drift_text",
             "timestamp",
             "external_key",
+            "source_text_sha256",
             "image_key",
             "image_mentions",
             "metadata",
