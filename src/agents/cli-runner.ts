@@ -531,6 +531,7 @@ async function runPreparedCliAgentOwned(
           usage: output.usage,
           stopReason: resolveCliAssistantStopReason(output),
           yielded: output.yielded,
+          transcriptTextReceipt: output.transcriptTextReceipt,
         });
         await finalizeCliContextEngineTurn({
           context,

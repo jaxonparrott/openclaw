@@ -25,6 +25,7 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { createCliAssistantTextReceipts } from "./cli-session-history-receipts.worker.js";
 
 const INDEX_INSERT_BATCH_ROWS = 65;
 const INDEX_ORDINAL_BATCH_ROWS = 256;
@@ -196,6 +197,7 @@ export class CliSessionHistoryIndex {
   private readonly db;
   private readonly insertMessage;
   private readonly insertImport;
+  private readonly assistantTextReceipts;
   private readonly assignOrdinal;
   private readonly readOrderFloor;
   private readonly advanceOrderFloor;
@@ -219,6 +221,7 @@ export class CliSessionHistoryIndex {
       .exec(`PRAGMA journal_mode = OFF; PRAGMA synchronous = OFF; PRAGMA cache_size = -2048;
       CREATE TABLE messages (${columns}); CREATE TABLE imports (${columns});
       CREATE TABLE floors (role TEXT NOT NULL, text TEXT NOT NULL, minimum_order INTEGER NOT NULL, PRIMARY KEY(role,text));
+      CREATE TABLE assistant_text_receipts (external_key TEXT PRIMARY KEY, text_sha256 TEXT NOT NULL);
       CREATE INDEX match_external ON messages(external_key, id);
       CREATE INDEX match_text ON messages(role, text, consumed, id);
       CREATE INDEX match_timed_text ON messages(role, text, consumed, id) WHERE timestamp IS NOT NULL;
@@ -230,6 +233,7 @@ export class CliSessionHistoryIndex {
     enableNodeSqliteKyselyStatementCache(this.database);
     this.insertMessage = this.createInserter("messages");
     this.insertImport = this.createInserter("imports");
+    this.assistantTextReceipts = createCliAssistantTextReceipts(this.database);
     this.readOrderFloor = prepareSqliteQueryTakeFirstSync<
       { role: string; text: string },
       { minimum_order: number }
@@ -368,6 +372,9 @@ export class CliSessionHistoryIndex {
       runSqliteImmediateTransactionSync(this.database, () => {
         for (const row of rows) {
           this.insertMessage(row);
+        }
+        for (const { message } of messages.slice(offset, offset + INDEX_INSERT_BATCH_ROWS)) {
+          this.assistantTextReceipts.capture(message);
         }
       });
     }
@@ -554,7 +561,14 @@ export class CliSessionHistoryIndex {
           .limit(INDEX_INSERT_BATCH_ROWS),
       ).rows;
       runSqliteImmediateTransactionSync(this.database, () => {
-        for (const imported of batch) {
+        for (let imported of batch) {
+          const coveredText = this.assistantTextReceipts.project(imported);
+          if (coveredText && "omitted" in coveredText) {
+            continue;
+          }
+          if (coveredText && "message" in coveredText) {
+            imported = this.row(coveredText.message, imported.id);
+          }
           let duplicate = imported.external_key ? matchExternal(imported.external_key) : undefined;
           if (duplicate) {
             advance(imported, duplicate);

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
@@ -68,6 +69,16 @@ it.each([
         text: "The worker result passed validation",
         modelId: "claude-sonnet-4-6",
         stopReason: "stop",
+        transcriptTextReceipt: {
+          provider: "claude-cli",
+          cliSessionId: "native-session",
+          messages: [
+            {
+              externalId: "native-assistant",
+              textSha256: sha256Hex("The worker result passed validation"),
+            },
+          ],
+        },
       });
       expect(result.owned).toBe(true);
       const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
@@ -77,6 +88,18 @@ it.each([
         {
           role: "assistant",
           content: [{ type: "text", text: "The worker result passed validation" }],
+          __openclaw: {
+            cliAssistantTextReceipt: {
+              provider: "claude-cli",
+              cliSessionId: "native-session",
+              messages: [
+                {
+                  externalId: "native-assistant",
+                  textSha256: sha256Hex("The worker result passed validation"),
+                },
+              ],
+            },
+          },
         },
       ]);
       expect(Reflect.get(messages[0]!, "display") === false).toBe(hidden);
