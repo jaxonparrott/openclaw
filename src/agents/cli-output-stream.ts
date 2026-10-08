@@ -52,6 +52,7 @@ import {
   measureClaudePartialMessage,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
+import { CliAssistantTextReceipt } from "./cli-output-text-receipt.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
@@ -94,10 +95,20 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     Boolean(params.onCommentaryText) && supportsCliJsonlToolEvents(params);
   const thinkingTracker = createThinkingTracker();
   const claudeStreamJson = isClaudeStreamJsonDialect(params);
+  const assistantTextReceipt = claudeStreamJson ? new CliAssistantTextReceipt() : undefined;
   let taggedReasoningRouter = createLeadingTaggedReasoningRouter();
   let currentTaggedReasoningText = "";
 
-  const appendAssistantText = (delta: string) => {
+  const appendAssistantText = (delta: string, sourceText = delta) => {
+    if (claudeStreamJson && currentClaudeMessageId && delta) {
+      assistantTextReceipt?.append({
+        start: assistantText.length + delta.length - sourceText.length,
+        end: assistantText.length + delta.length,
+        messageId: currentClaudeMessageId,
+        text: sourceText,
+        sessionId,
+      });
+    }
     assistantText += delta;
     params.onAssistantDelta({ text: assistantText, delta, sessionId, usage });
   };
@@ -148,7 +159,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
     }
     pendingMessageSeparator = false;
     sawToolUseSinceText = false;
-    appendAssistantText(`${separator}${delta}`);
+    appendAssistantText(`${separator}${delta}`, delta);
   };
 
   const routeTaggedReasoningDeltas = (
@@ -335,6 +346,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         }
       }
       resumeCheckpointId = pickCliResumeCheckpointId({ ...params, parsed }) ?? resumeCheckpointId;
+      assistantTextReceipt?.observe(parsed, currentClaudeMessageId, sessionId);
       params.onAssistantMessage?.(parsed.message);
       if (claudeStreamJson && isClaudeSyntheticNoResponse(parsed)) {
         sawClaudeSyntheticNoResponse = true;
@@ -419,6 +431,12 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         keepStreamed ? preservedCandidate : result.text || streamedText || texts.join("\n").trim()
       ).trim();
       const { text, textParts, completedText } = appendCliResultText(output, nextText);
+      const transcriptTextReceipt = assistantTextReceipt?.read({
+        start: keepStreamed ? preserveFrom : segmentStart,
+        resultText: keepStreamed ? undefined : result.text || undefined,
+        sessionId,
+        previous: output?.transcriptTextReceipt,
+      });
       const syntheticNoResponse =
         sawClaudeSyntheticNoResponse &&
         parsed.subtype === "success" &&
@@ -449,6 +467,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
           ? { text: "", errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
+        ...(text && transcriptTextReceipt ? { transcriptTextReceipt } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),
       };
       if (
@@ -706,9 +725,14 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         }
       }
       if (sawCustomJsonlEvent || partialOutput.text) {
+        const transcriptTextReceipt =
+          !sawCustomJsonlEvent && supportsCliJsonlToolEvents(params)
+            ? assistantTextReceipt?.read({ start: 0, sessionId })
+            : undefined;
         return {
           ...partialOutput,
           ...(!sawCustomJsonlEvent && resumeCheckpointId ? { resumeCheckpointId } : {}),
+          ...(transcriptTextReceipt ? { transcriptTextReceipt } : {}),
         };
       }
       if (isGeminiStreamJsonDialect(params) && sawGeminiStructuredOutput) {

@@ -138,6 +138,7 @@ export async function persistCliAssistantTranscript(params: {
   usage?: CliUsage;
   stopReason: StopReason;
   yielded?: true;
+  transcriptTextReceipt?: CliOutput["transcriptTextReceipt"];
 }): Promise<{
   owned: boolean;
   idempotencyKey?: string;
@@ -205,6 +206,9 @@ export async function persistCliAssistantTranscript(params: {
             totalTokens: params.usage?.total,
           }),
         }),
+        ...(params.transcriptTextReceipt
+          ? { __openclaw: { cliAssistantTextReceipt: params.transcriptTextReceipt } }
+          : {}),
         // A paused turn owns visible progress, not a final answer. Keep the
         // existing keyed-segment contract without hiding narration or media.
         ...(params.yielded && params.stopReason === "stop"
