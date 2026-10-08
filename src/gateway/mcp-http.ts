@@ -433,9 +433,13 @@ async function startMcpLoopbackServer(
             if (callerIdentity && boundClientGrant?.personalToolParticipants) {
               callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
             }
-            response = await withGatewayToolCallerIdentity(callerIdentity, () =>
-              runWithTrackedCancellation(requestAbort.signal, handleRequest),
-            );
+            const runTool = () =>
+              withGatewayToolCallerIdentity(callerIdentity, () =>
+                runWithTrackedCancellation(requestAbort.signal, handleRequest),
+              );
+            response = boundClientGrant
+              ? await boundClientGrant.runInContinuation(runTool)
+              : await runTool();
           } finally {
             markMcpLoopbackToolCallFinished(cliCaptureHandle);
           }
