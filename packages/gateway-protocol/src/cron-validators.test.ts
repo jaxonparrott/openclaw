@@ -28,6 +28,21 @@ const minimalAddParams = {
   payload: { kind: "systemEvent", text: "tick" },
 } as const;
 
+it("accepts command maintenance only as an explicit update request option", () => {
+  expect(
+    validateCronUpdateParams({
+      id: "job",
+      patch: { enabled: false },
+      preserveRunning: true,
+      expectedConfigRevision: "0".repeat(64),
+    }),
+  ).toBe(true);
+  expect(
+    validateCronUpdateParams({ id: "job", patch: { enabled: false }, preserveRunning: false }),
+  ).toBe(false);
+  expect(validateCronAddParams({ ...minimalAddParams, preserveRunning: true })).toBe(false);
+});
+
 describe("command failure recovery ownership", () => {
   const policy = {
     agentId: "main",

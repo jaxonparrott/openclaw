@@ -682,6 +682,8 @@ export const CronUpdateParamsSchema = cronIdOrJobIdParams({
   patch: CronJobPatchSchema,
   /** Rejects the patch when the current definition does not match the caller's token. */
   expectedConfigRevision: Type.Optional(CronConfigRevisionSchema),
+  /** Pauses only command recurrence without cancelling an already-admitted invocation. */
+  preserveRunning: Type.Optional(Type.Literal(true)),
 });
 
 /** Removes a cron job by id or legacy jobId alias. */
