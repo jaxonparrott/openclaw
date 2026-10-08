@@ -32,6 +32,7 @@ export async function finalizeCronRuntimeRows<Value>(params: {
     retiredTriggerReceiptIds: ReadonlySet<string>;
   }) => {
     jobs: CronJob[];
+    createdJobs?: CronJob[];
     deletedJobIds: string[];
     value: Value;
   };
@@ -133,6 +134,7 @@ export async function finalizeCronRuntimeRows<Value>(params: {
           value: {
             defaultAgentId,
             jobs: mutation.jobs,
+            createdJobs: mutation.createdJobs ?? [],
             deletedJobIds: mutation.deletedJobIds,
             deferredReceiptIds: retained
               .filter(({ settlement }) => settlement.pending)

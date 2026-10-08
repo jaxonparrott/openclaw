@@ -153,6 +153,7 @@ export type CronRuntimeMutationContracts = {
     preparation: {
       defaultAgentId?: string;
       jobs: CronJob[];
+      createdJobs: CronJob[];
       deletedJobIds: string[];
       deferredReceiptIds: string[];
     };

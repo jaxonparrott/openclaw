@@ -7,6 +7,7 @@ import {
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
+import { planCommandFailureRecovery } from "./command-failure-recovery.js";
 import { locked } from "./locked.js";
 import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
@@ -187,6 +188,7 @@ export async function finalizeCompletedCronRunOutcomes(
         markers: finalizedOutcomes.map((outcome) => outcome.activeJobMarker),
         mutate: ({ jobs, retiredTriggerReceiptIds }) => {
           const upsertedJobs: CronJob[] = [];
+          const createdJobs: CronJob[] = [];
           const removedJobs: CronJob[] = [];
           const eventPlans: Array<{ outcome: TimedCronRunOutcome; job?: CronJob }> = [];
           for (const outcome of finalizedOutcomes) {
@@ -206,19 +208,24 @@ export async function finalizeCompletedCronRunOutcomes(
               removedJobs.push(job);
             } else {
               upsertedJobs.push(job);
+              const recovery = planCommandFailureRecovery(state, job, outcome, jobs);
+              if (recovery) {
+                createdJobs.push(recovery);
+              }
             }
             eventPlans.push({ outcome, job: structuredClone(job) });
           }
           return {
             deletedJobIds: removedJobs.map((job) => job.id),
             jobs: upsertedJobs,
-            value: { eventPlans, removedJobs, upsertedJobs },
+            createdJobs,
+            value: { eventPlans, removedJobs, upsertedJobs, createdJobs },
           };
         },
       });
       applyCronRuntimeRowsToState(
         state,
-        committed.upsertedJobs,
+        [...committed.upsertedJobs, ...committed.createdJobs],
         committed.removedJobs.map((job) => job.id),
         { publish: false },
       );
