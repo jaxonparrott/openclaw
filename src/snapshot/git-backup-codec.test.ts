@@ -2,13 +2,16 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
 import { createGitBackup, restoreGitBackupRef } from "./git-backup.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-text-"));
@@ -107,7 +110,7 @@ it("preserves TEXT, storage classes, key order, quoted DDL, and CASE triggers", 
 });
 
 it("restores literal JSON Unicode separators across UTF-8 chunks from an actual Git backup", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-unicode-"));
+  const root = tempDirs.make("git-backup-unicode-");
   const stateDir = path.join(root, "state");
   const sourcePath = path.join(stateDir, "source.sqlite");
   const repositoryPath = path.join(root, "repository");
@@ -148,12 +151,11 @@ it("restores literal JSON Unicode separators across UTF-8 chunks from an actual 
     }
   } finally {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   }
 });
 
 it("refuses malformed JSON, changed bytes and incomplete EOF without publishing a restore", async () => {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "git-backup-invalid-jsonl-"));
+  const root = tempDirs.make("git-backup-invalid-jsonl-");
   const sourcePath = path.join(root, "source.sqlite");
   const outputPath = path.join(root, "dump");
   try {
@@ -187,6 +189,5 @@ it("refuses malformed JSON, changed bytes and incomplete EOF without publishing 
     }
   } finally {
     closeOpenClawStateDatabaseForTest();
-    await fs.rm(root, { recursive: true, force: true });
   }
 });
