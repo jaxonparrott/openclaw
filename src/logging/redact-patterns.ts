@@ -425,6 +425,7 @@ const DEFAULT_REDACT_FIELD_PATTERNS: readonly RedactPattern[] = [
 ];
 
 export const VENDOR_TOKEN_REDACT_PATTERNS: readonly string[] = [
+  String.raw`\b(vck_[A-Za-z0-9_-]{8,})\b`,
   String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
   String.raw`(ghp_[A-Za-z0-9]{10,})`,
   String.raw`(github_pat_[A-Za-z0-9_]{10,})`,

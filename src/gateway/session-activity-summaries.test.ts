@@ -261,19 +261,20 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     expect(parse.mock.calls.some(([json]) => json.includes(unrelatedLabel))).toBe(false);
     parse.mockRestore();
     expect(view()?.state).toBe("current");
-    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(4);
     const first = complete.mock.calls[0]?.[0];
     const second = complete.mock.calls[1]?.[0];
     expect(first).toMatchObject({ model: "utility", provider: "test" });
     expect(JSON.parse(first!.prompt).messages[0]).toContain("Outcome 0");
     expect(JSON.parse(first!.prompt).messages.at(-1)).toContain("Outcome 63");
     expect(JSON.parse(second!.prompt)).toMatchObject({ previousRecap: "Recap through batch 1." });
-    expect(JSON.parse(second!.prompt).messages.at(-1)).toContain("Outcome 69");
-    expect(JSON.parse(complete.mock.calls[2]![0].prompt).messages).toEqual([
+    expect(JSON.parse(second!.prompt).messages[5]).toContain("Outcome 69");
+    expect(JSON.parse(second!.prompt).messages.at(-1)).toContain("Internal tool log dump");
+    expect(JSON.parse(complete.mock.calls[3]![0].prompt).messages.at(-1)).toBe(
       "assistant: Shipped the fix. Waiting for review.",
-    ]);
+    );
     expect(complete.mock.calls.map(([request]) => request.prompt).join("\n")).not.toMatch(
-      /Internal tool log dump|internal_tool|Old progress/,
+      /internal_tool|Old progress/,
     );
     expect(read()?.activitySummary).toMatchObject({
       coveredMessages: 199,
@@ -285,7 +286,93 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     service = createService();
     await awaitPublication(() => service.ensure(target));
     expect(view()?.state).toBe("current");
-    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(4);
+  });
+
+  it("supplies redacted native tool evidence alongside final text instead of only a prior recap", async () => {
+    await messages(2);
+    complete.mockResolvedValueOnce(
+      result("The request was refused because the tools do not exist."),
+    );
+    await awaitPublication(() => terminal(service));
+    const credential = "vck_synthetic_123456789012345678901234567890";
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        {
+          eventId: "message-2",
+          parentId: "message-1",
+          message: {
+            role: "toolResult",
+            toolName: "decision_evaluate",
+            isError: false,
+            content: `Verified the decision. ${"Recorded detail. ".repeat(100)} OMITTED_MIDDLE ${"Recorded detail. ".repeat(100)} ${JSON.stringify(
+              [
+                { name: "AI_GATEWAY_API_KEY", kind: "env", valuePreview: credential },
+                { name: "PREVIEW_LABEL", kind: "env", valuePreview: "development" },
+              ],
+            )}`,
+          },
+        },
+        {
+          eventId: "message-3",
+          parentId: "message-2",
+          message: {
+            role: "toolResult",
+            toolName: "inspect_preview",
+            content: [{ type: "image", mimeType: "image/png", data: "fixture" }],
+          },
+        },
+        {
+          eventId: "message-4",
+          parentId: "message-3",
+          message: {
+            role: "assistant",
+            content: "The decision completed successfully.",
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    await awaitPublication(() => terminal(service));
+    const request = complete.mock.calls[1]![0];
+    const input = JSON.parse(request.prompt);
+    expect(input.messages).toContain("assistant: The decision completed successfully.");
+    expect(input.messages.join(" ")).toContain(
+      "toolResult (decision_evaluate, isError=false): Verified the decision.",
+    );
+    expect(input.messages).toContain(
+      "toolResult (inspect_preview, isError=unknown): (No text content recorded.)",
+    );
+    expect(request.prompt).not.toContain(credential);
+    expect(request.prompt).not.toContain("OMITTED_MIDDLE");
+    expect(
+      input.messages.find((note: string) => note.startsWith("toolResult")).length,
+    ).toBeLessThanOrEqual(920);
+    expect(request.systemPrompt).toContain(
+      "Transcript facts take precedence over the previous generated recap",
+    );
+  });
+
+  it("rebuilds a fully covered old-format recap from transcript instead of recycling false text", async () => {
+    await messages(2);
+    await awaitPublication(() => terminal(service));
+    await patchSessionEntryCore(
+      scope,
+      (entry) => ({
+        activitySummary: {
+          ...entry.activitySummary!,
+          formatRevision: 3,
+          text: "The request was refused because the tools do not exist.",
+        },
+      }),
+      { preserveActivity: true },
+    );
+    expect(service.ensure(target)?.state).toBe("updating");
+    await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+    const input = JSON.parse(complete.mock.calls[1]![0].prompt);
+    expect(input.previousRecap).toBe("");
+    expect(input.messages).toEqual(["user: Outcome 0", "assistant: Outcome 1"]);
+    await vi.waitFor(() => expect(view()?.state).toBe("current"));
   });
 
   it("keeps describe non-current while the newer first-turn recap is queued or held", async () => {

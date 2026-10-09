@@ -4,7 +4,10 @@ import type {
   SessionActivitySummaryBatchInput,
   SessionActivitySummaryBatchResult,
 } from "../config/sessions/activity-summary-source.types.js";
-import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
+import {
+  ACTIVITY_SUMMARY_FORMAT_REVISION,
+  ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION,
+} from "../config/sessions/activity-summary.js";
 import {
   readSessionTranscriptActivePathEntryRelation,
   readSessionTranscriptBoundedMessageTailPage,
@@ -39,7 +42,8 @@ export function readActivitySummaryBatch(
   let previous = params.previous;
   if (
     previous &&
-    (previous.generation !== (snapshot.snapshot.generation ?? null) ||
+    ((previous.formatRevision ?? 1) < ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION ||
+      previous.generation !== (snapshot.snapshot.generation ?? null) ||
       previous.coveredMessages > snapshot.totalMessages ||
       (previous.leafEntryId &&
         !["exact", "ancestor"].includes(
@@ -60,7 +64,7 @@ export function readActivitySummaryBatch(
       offset: snapshot.totalMessages - covered - maxMessages,
       readOnly: true,
       oversizedMessageCheck: {
-        roles: ["user", "assistant"],
+        roles: ["user", "assistant", "toolResult"],
         includeEarlier,
       },
     });
@@ -123,7 +127,10 @@ export async function readActivitySummarySource(
       }
       const notes = source.page.events.flatMap(({ event }) => {
         const message = isRecord(event) ? event.message : undefined;
-        if (!isRecord(message) || (message.role !== "user" && message.role !== "assistant")) {
+        if (
+          !isRecord(message) ||
+          (message.role !== "user" && message.role !== "assistant" && message.role !== "toolResult")
+        ) {
           return [];
         }
         const text =
@@ -134,14 +141,19 @@ export async function readActivitySummarySource(
         const cleaned = redactToolPayloadText(text ?? "")
           .replace(/\s+/gu, " ")
           .trim();
-        if (!cleaned) {
+        if (!cleaned && message.role !== "toolResult") {
           return [];
         }
-        const excerpt =
-          cleaned.length <= 800
+        const excerpt = !cleaned
+          ? "(No text content recorded.)"
+          : cleaned.length <= 800
             ? cleaned
             : `${sliceUtf16Safe(cleaned, 0, 395)} … ${sliceUtf16Safe(cleaned, -400)}`;
-        return [`${message.role}: ${excerpt}`];
+        const role =
+          message.role === "toolResult"
+            ? `toolResult (${typeof message.toolName === "string" ? sliceUtf16Safe(redactToolPayloadText(message.toolName), 0, 80) : "unnamed"}, isError=${typeof message.isError === "boolean" ? message.isError : "unknown"})`
+            : message.role;
+        return [`${role}: ${excerpt}`];
       });
       return { ...source, notes };
     };

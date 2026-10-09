@@ -257,10 +257,10 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         await settled.promise;
       };
       await refresh();
-      const summaryText = recap + (role === "toolResult" ? "" : notice);
+      const summaryText = recap + notice;
       expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
         text: summaryText,
-        omittedContent: role !== "toolResult",
+        omittedContent: true,
         coveredMessages: 3,
       });
       await patchSessionEntryCore(
@@ -280,11 +280,18 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       expect(view(target)).toMatchObject({ state: "stale", text: recap + notice });
       complete.mockClear();
       await refresh();
-      expect(complete).not.toHaveBeenCalled();
+      expect(complete).toHaveBeenCalledTimes(2);
+      expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
+        previousRecap: "",
+        messages: ["user: Request 0"],
+      });
+      expect(JSON.parse(complete.mock.calls[1]![0].prompt).messages).toEqual([
+        "assistant: Verified the requested work.",
+      ]);
       expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
         formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
         text: summaryText,
-        omittedContent: role !== "toolResult",
+        omittedContent: true,
       });
       if (role === "user") {
         const summary = loadSessionEntryReadOnly(scope(target))!.activitySummary!;
@@ -316,21 +323,21 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         touchSessionEntry: false,
       });
       await refresh();
-      expect(JSON.parse(complete.mock.calls[0]![0].prompt)).toMatchObject({
+      expect(JSON.parse(complete.mock.calls[2]![0].prompt)).toMatchObject({
         previousRecap: recap,
         messages: ["assistant: Outcome 3"],
-        omittedContent: role !== "toolResult",
+        omittedContent: true,
       });
       expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
         text: summaryText,
-        omittedContent: role !== "toolResult",
+        omittedContent: true,
         coveredMessages: 4,
       });
     },
   );
 
   it.each([false, true])(
-    "restyles old cached text once while retaining coverage (new work: %s)",
+    "rebuilds old cached text from transcript once while retaining coverage (new work: %s)",
     async (newWork) => {
       const target = await addSession(1);
       service.ensure(target);
@@ -347,16 +354,18 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         await appendWork(target);
       }
       expect(view(target)).toMatchObject({ state: "stale", text: oldText });
-      const restyled = createDeferred<typeof result>();
-      complete.mockImplementationOnce(() => restyled.promise);
+      const rebuilt = createDeferred<typeof result>();
+      complete.mockImplementationOnce(() => rebuilt.promise);
       try {
         expect(service.ensure(target)).toMatchObject({ state: "updating", text: oldText });
         await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
         expect(JSON.parse(complete.mock.calls[1]![0].prompt)).toMatchObject({
-          previousRecap: oldText,
-          messages: newWork ? ["assistant: Verified additional work."] : [],
+          previousRecap: "",
+          messages: newWork
+            ? ["user: Request 1", "assistant: Verified additional work."]
+            : ["user: Request 1"],
         });
-        restyled.resolve({ ...result, text: "Verified the change. Waiting for review." });
+        rebuilt.resolve({ ...result, text: "Verified the change. Waiting for review." });
         await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
         expect(loadSessionEntryReadOnly(scope(target))?.activitySummary).toMatchObject({
           version: 1,
@@ -366,7 +375,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
           totalMessages: newWork ? 2 : 1,
         });
       } finally {
-        restyled.resolve({ ...result, text: "Verified the change. Waiting for review." });
+        rebuilt.resolve({ ...result, text: "Verified the change. Waiting for review." });
       }
       await service.dispose();
       service = createService();
@@ -467,7 +476,7 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     },
   );
 
-  it("retains the previous recap on restyle failure without rebilling repeated requests", async () => {
+  it("retains the previous recap on rebuild failure without rebilling repeated requests", async () => {
     const target = await addSession(1);
     service.ensure(target);
     await vi.waitFor(() => expect(view(target)?.state).toBe("current"));

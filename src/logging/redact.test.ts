@@ -124,6 +124,18 @@ describe("registered exact secret values", () => {
     ).toBe("full context regist…cret");
   });
 
+  it("masks Vercel Gateway credentials in plain text and native value previews", () => {
+    const credential = "vck_synthetic_123456789012345678901234567890";
+    const listing = JSON.stringify([
+      { name: "AI_GATEWAY_API_KEY", kind: "env", valuePreview: credential },
+      { name: "PREVIEW_LABEL", kind: "env", valuePreview: "development" },
+    ]);
+    expect(redactSensitiveText(credential)).not.toContain(credential);
+    const redacted = redactToolPayloadTextWithConfig(listing);
+    expect(redacted).not.toContain(credential);
+    expect(redacted).toContain('"valuePreview":"development"');
+  });
+
   it("ignores values shorter than six characters", () => {
     registerSecretValueForRedaction("abcde");
     expect(redactSensitiveText("value abcde", { mode: "off" })).toBe("value abcde");

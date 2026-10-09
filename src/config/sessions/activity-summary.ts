@@ -1,9 +1,9 @@
 import { z } from "zod";
 import type { SessionEntry } from "./types.js";
 
-export const ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION = 2;
-// Revision 3 certifies role-aware omissions without regenerating revision-2 text.
-export const ACTIVITY_SUMMARY_FORMAT_REVISION = 3;
+export const ACTIVITY_SUMMARY_TEXT_FORMAT_REVISION = 4;
+// Tool evidence changes recap meaning; older text must be rebuilt from transcript.
+export const ACTIVITY_SUMMARY_FORMAT_REVISION = 4;
 
 const ActivitySummarySchema = z.object({
   version: z.literal(1),
