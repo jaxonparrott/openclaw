@@ -18,6 +18,10 @@ import {
   sendHttpRequestRejection,
 } from "../infra/http-request-lifecycle.js";
 import { logDebug, logWarn } from "../logger.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayContextResolver,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import {
@@ -574,10 +578,17 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
   if (!activeMcpLoopbackServerPromise) {
     // The process-owned listener must outlive its creator's work, generation, and authority.
     const work = new AsyncWorkScope();
+    const creatorScope = getPluginRuntimeGatewayRequestScope();
+    const resolveGatewayContext =
+      creatorScope?.resolveGatewayContext ?? creatorScope?.context?.resolveGatewayContext;
     activeMcpLoopbackServerPromise = runOutsideOperatorToolGatewayAuthority(() =>
       runOutsidePluginRuntimeGenerationScope(() =>
         runOutsideGatewayRootWorkAdmission(() =>
-          work.run(() => startMcpLoopbackServer(port, work)),
+          withPluginRuntimeGatewayContextResolver(
+            resolveGatewayContext,
+            () => work.run(() => startMcpLoopbackServer(port, work)),
+            { inheritRequestScope: false },
+          ),
         ),
       ),
     )
