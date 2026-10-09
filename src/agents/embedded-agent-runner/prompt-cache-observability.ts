@@ -141,12 +141,6 @@ function buildTrackerKey(params: PromptCacheIdentity): string {
   return params.promptCacheKey?.trim() || params.sessionKey?.trim() || params.sessionId;
 }
 
-function setTracker(key: string, tracker: PromptCacheTracker): void {
-  trackers.delete(key);
-  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
-  trackers.set(key, tracker);
-}
-
 function diffSnapshots(
   previous: PromptCacheSnapshot,
   next: PromptCacheSnapshot,
@@ -256,7 +250,8 @@ export function beginPromptCacheObservation(
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),
   };
-  const previous = trackers.get(key);
+  const cached = trackers.get(key);
+  const previous = cached?.sessionId === params.sessionId ? cached : undefined;
   const history = params.messages.map((message, index) =>
     fingerprintMessage(message, previous?.history[index]),
   );
@@ -271,11 +266,9 @@ export function beginPromptCacheObservation(
   for (const code of previous?.declaredRewrites ?? []) {
     changes.push({ code, detail: `${code} changed provider history` });
   }
-  const restarted =
-    previous?.sessionId !== params.sessionId ||
-    changes.some(
-      ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
-    );
+  const restarted = changes.some(
+    ({ code }) => code === "model" || code === "transport" || code === "cacheRetention",
+  );
   const divergence =
     previous && !restarted && !previous.declaredRewrites?.size
       ? previous.history.findIndex((message, index) => message.digest !== history[index]?.digest)
@@ -290,7 +283,7 @@ export function beginPromptCacheObservation(
   if (violation) {
     changes.push(violation);
   }
-  setTracker(key, {
+  const tracker: PromptCacheTracker = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey?.trim(),
     history,
@@ -298,7 +291,10 @@ export function beginPromptCacheObservation(
     lastCacheRead: previous?.lastCacheRead ?? null,
     lastCacheReadSnapshot: previous?.lastCacheReadSnapshot,
     pendingChanges: changes.length > 0 ? changes : null,
-  });
+  };
+  trackers.delete(key);
+  pruneMapToMaxSize(trackers, MAX_TRACKERS - 1);
+  trackers.set(key, tracker);
   if (violation) {
     if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1") {
       throw new Error(violation.detail);
