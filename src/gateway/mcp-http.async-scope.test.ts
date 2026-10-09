@@ -16,12 +16,31 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { callInProcessGatewayTool } from "../agents/tools/in-process-gateway.js";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  deactivateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+  revokeMcpLoopbackClientGrant,
+} from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "./operator-tool-gateway-authority.js";
+import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
+import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 
 const completed = { content: [{ type: "text", text: "tracked tool completed" }] };
 const executionScopes: Array<AbortSignal | undefined> = [];
@@ -108,6 +127,120 @@ describe("MCP HTTP work ownership", () => {
     );
     lifetime.abort(new Error("operator tool invocation authority expired"));
     expect(await callTool()).toMatchObject({ result: { ...completed, isError: false } });
+  });
+
+  it("drops the listener creator request while retaining fresh admitted tool authority without operator authority", async () => {
+    const context = createContext();
+    context.resolveGatewayContext = () => context;
+    const handler = vi.fn(({ respond }: GatewayRequestHandlerOptions) =>
+      respond(true, { jobs: [] }),
+    );
+    context.getGatewayMethodRegistry = () =>
+      createGatewayMethodRegistry([
+        {
+          name: "cron.list",
+          scope: "operator.read",
+          owner: { kind: "core", area: "cron" },
+          handler,
+        },
+      ]);
+    let creatorCurrent = true;
+    await withPluginRuntimeGatewayRequestScope(
+      {
+        context,
+        resolveGatewayContext: context.resolveGatewayContext,
+        isWebchatConnect: () => false,
+        hasCurrentClientAuthority: () => creatorCurrent,
+      },
+      () => ensureMcpLoopbackServer(),
+    );
+    creatorCurrent = false;
+    const admission = prepareAgentRunAdmission({
+      cfg: {},
+      operationalRunInstance: createOperationalRunInstanceRef("fresh-cli-scope"),
+      facts: {
+        runId: "fresh-cli-scope",
+        agentId: "main",
+        ingress: { kind: "system", boundary: "scope-test", state: "present" },
+      },
+    });
+    let token: string | undefined;
+    try {
+      const admittedRunContext = await admission.admit("gateway");
+      const runtime = getActiveMcpLoopbackRuntime()!;
+      token = mintMcpLoopbackClientGrant({
+        runtimeOwnerToken: runtime.ownerToken,
+        context: {
+          sessionKey: "agent:main:fresh-cli-scope",
+          agentId: "main",
+          runId: "fresh-cli-scope",
+          senderIsOwner: false,
+        },
+        admittedRunContext,
+      }).token;
+      const captureKey = "fresh-cli-capture";
+      expect(
+        activateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: "wrong-runtime-owner",
+          captureKey,
+        }),
+      ).toBe(false);
+      expect(
+        activateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: runtime.ownerToken,
+          captureKey,
+        }),
+      ).not.toBe(false);
+      execute.mockImplementation(async () => {
+        expect(getGatewayToolCallerIdentity()?.operatorAuthority).toBeUndefined();
+        expect(await callInProcessGatewayTool("cron.list", {})).toEqual({ jobs: [] });
+        expect(getPluginRuntimeGatewayRequestScope()?.hasCurrentClientAuthority).toBeUndefined();
+        return completed;
+      });
+      const request = (capture = captureKey) =>
+        fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "x-openclaw-cli-capture-key": capture,
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "scope_probe", arguments: {} },
+          }),
+        });
+      const response = await request();
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ result: { ...completed, isError: false } });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect((await request("wrong-capture")).status).toBe(401);
+      deactivateMcpLoopbackClientGrantCapture({
+        token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey,
+      });
+      expect((await request()).status).toBe(401);
+      expect(
+        activateMcpLoopbackClientGrantCapture({
+          token,
+          runtimeOwnerToken: runtime.ownerToken,
+          captureKey,
+        }),
+      ).not.toBe(false);
+      revokeMcpLoopbackClientGrant(token);
+      expect((await request()).status).toBe(401);
+      expect(handler).toHaveBeenCalledTimes(1);
+    } finally {
+      if (token) {
+        revokeMcpLoopbackClientGrant(token);
+      }
+      admission.close();
+    }
   });
 
   it("serves fresh request scopes after its replacement creator closes", async () => {
