@@ -84,8 +84,9 @@ describe("native command recovery Gateway authority", () => {
             if (
               child.state.commandRecoveryOrigin?.startedAtMs !== undefined &&
               child.state.lastRunStatus
-            )
+            ) {
               break;
+            }
           }
           await sleep(100);
         }
@@ -94,7 +95,9 @@ describe("native command recovery Gateway authority", () => {
         expect(child?.delivery).toMatchObject({ mode: "none" });
         const childRuns = await gateway.call("cron.runs", { id: child!.id });
         expect(JSON.stringify(childRuns)).toContain(child!.id);
-        if (!mock) throw new Error("missing deterministic provider");
+        if (!mock) {
+          throw new Error("missing deterministic provider");
+        }
         const requests = await fetch(`${mock.baseUrl}/debug/requests`).then((response) =>
           response.json(),
         );

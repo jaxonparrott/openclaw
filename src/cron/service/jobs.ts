@@ -40,6 +40,7 @@ import {
 import { reconcileToolsAllowAuthority } from "./jobs-tool-policy.js";
 import {
   assertAnnounceDeliveryChannelSupport,
+  assertCommandFailureRecoverySupport,
   assertTimeScheduleSatisfiable,
   assertDeliverySupport,
   assertFailureDestinationSupport,
@@ -138,29 +139,7 @@ function validateFullJob(
   configuredChannels?: readonly string[],
 ) {
   const cronConfig = context.cronConfig;
-  const recovery = job.failureRecovery;
-  if (
-    recovery &&
-    (!recovery.agentId?.trim() ||
-      !recovery.message?.trim() ||
-      recovery.message.length > 8_000 ||
-      (recovery.toolsAllow !== undefined &&
-        (!Array.isArray(recovery.toolsAllow) ||
-          recovery.toolsAllow.some((tool) => typeof tool !== "string" || !tool.trim()))) ||
-      (recovery.timeoutSeconds !== undefined &&
-        (!Number.isInteger(recovery.timeoutSeconds) ||
-          recovery.timeoutSeconds < 1 ||
-          recovery.timeoutSeconds > 2_400)))
-  ) {
-    throw new Error("invalid command failure recovery policy");
-  }
-  if (
-    job.failureRecovery &&
-    (job.payload.kind !== "command" ||
-      (job.schedule.kind !== "every" && job.schedule.kind !== "cron"))
-  ) {
-    throw new Error("failure recovery requires a recurring command job");
-  }
+  assertCommandFailureRecoverySupport(job);
   const triggerTouched =
     context.kind === "create"
       ? job.trigger !== undefined
