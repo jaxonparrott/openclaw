@@ -2,6 +2,7 @@ import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
 // Formats subagent status rows for the status command response.
 import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
+import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatRunLabel } from "./subagents-utils.js";
@@ -43,7 +44,15 @@ export function buildSubagentsStatusLine(params: {
   const now = params.now ?? Date.now();
   const activeRuns = new Set(context.list.view.active);
   let active = 0;
-  let done = 0;
+  const endedCounts = {
+    done: 0,
+    failed: 0,
+    "timed out": 0,
+    cancelled: 0,
+    ended: 0,
+    "delivery pending": 0,
+    "delivery blocked": 0,
+  };
   const detailLines: string[] = [];
   for (const entry of context.runs) {
     const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
@@ -67,13 +76,39 @@ export function buildSubagentsStatusLine(params: {
           : "";
       detailLines.push(`  • ${label} · ${duration} · ${executionText}${descendantText}`);
     } else if (hasSubagentRunEnded(entry) && pendingDescendants === 0) {
-      done += 1;
+      const outcomeStatus = entry.execution.outcome?.status;
+      if (
+        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
+        entry.suppressAnnounceReason !== "steer-restart"
+      ) {
+        endedCounts.cancelled += 1;
+      } else if (outcomeStatus === "ok") {
+        endedCounts.done += 1;
+      } else if (outcomeStatus === "timeout") {
+        endedCounts["timed out"] += 1;
+      } else if (outcomeStatus === "error") {
+        endedCounts.failed += 1;
+      } else {
+        endedCounts.ended += 1;
+      }
+
+      const deliveryStatus = entry.delivery?.status;
+      if (deliveryStatus === "pending" || deliveryStatus === "in_progress") {
+        endedCounts["delivery pending"] += 1;
+      } else if (deliveryStatus === "failed" || deliveryStatus === "suspended") {
+        endedCounts["delivery blocked"] += 1;
+      }
     }
   }
+  const endedParts = Object.entries(endedCounts)
+    .filter(([, count]) => count > 0)
+    .map(([label, count]) => `${count} ${label}`);
   if (active === 0) {
-    return verboseEnabled && done > 0 ? `🤖 Subagents: 0 active · ${done} done` : undefined;
+    return verboseEnabled && endedParts.length > 0
+      ? `🤖 Subagents: 0 active · ${endedParts.join(" · ")}`
+      : undefined;
   }
 
-  const summary = `🤖 Subagents: ${active} active${done > 0 ? ` · ${done} done` : ""}`;
+  const summary = `🤖 Subagents: ${active} active${endedParts.length > 0 ? ` · ${endedParts.join(" · ")}` : ""}`;
   return [summary, ...detailLines].join("\n");
 }
