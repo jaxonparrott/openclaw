@@ -25,6 +25,44 @@ function claudeTextDelta(text: string) {
 }
 
 describe("Claude source text occurrence receipts", () => {
+  it.each([
+    { text: "partial answer", rejected: false },
+    { text: '<invoke name="Bash">\n<parameter name="command">echo 1', rejected: true },
+    { text: 'Example:\n```xml\n<invoke name="Bash">', rejected: false },
+  ])("receipts only accepted interrupted text: $text", ({ text, rejected }) => {
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "claude", output: "jsonl", sessionIdFields: ["session_id"] },
+      providerId: "claude-cli",
+      onAssistantDelta: () => {},
+    });
+    parser.push(
+      joinJsonlFrames(
+        { type: "init", session_id: "session-interrupted" },
+        claudeMessageStart("message-interrupted"),
+        claudeTextDelta(text),
+        {
+          type: "assistant",
+          uuid: "interrupted-uuid",
+          message: { id: "message-interrupted", content: [{ type: "text", text }] },
+        },
+      ),
+    );
+    parser.finish();
+    const output = parser.getOutput();
+    expect(parser.hasTerminalResult()).toBe(false);
+    expect(output?.text).toBe(rejected ? "" : text);
+    expect(output?.partialOutputRejected).toBe(rejected ? true : undefined);
+    expect(output?.transcriptTextReceipt).toEqual(
+      rejected
+        ? undefined
+        : {
+            provider: "claude-cli",
+            cliSessionId: "session-interrupted",
+            messages: [{ externalId: "interrupted-uuid", textSha256: sha256Hex(text) }],
+          },
+    );
+  });
+
   it.each([false, true])(
     "binds directly selected pre-identity text only within its source session: %s",
     (sessionChanged) => {
