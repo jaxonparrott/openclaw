@@ -137,7 +137,7 @@ it("restores literal JSON Unicode separators across UTF-8 chunks from an actual 
       targetPath,
     });
     expect(restored.tables.every((table) => table.ok)).toBe(true);
-    expect(restored.manifest.tables.unicode_values.rows).toBe(values.length);
+    expect(restored.manifest.tables.unicode_values?.rows).toBe(values.length);
     const database = new DatabaseSync(targetPath, { readOnly: true });
     try {
       expect(database.prepare("SELECT body FROM unicode_values ORDER BY id").all()).toEqual(
