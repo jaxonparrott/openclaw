@@ -38,6 +38,7 @@ const fixture = vi.hoisted(() => ({
     close: vi.fn(),
   },
 }));
+// mock-isolation: Drive private worker input through the fixture emitter instead of process.stdin.
 vi.mock("../infra/jsonl-lines.js", () => ({ createJsonlLineReader: () => fixture.input }));
 vi.mock("./startup-state-readiness.js", () => ({ ensureNodeHostStateReady: () => {} }));
 vi.mock("./config.js", () => ({ loadNodeHostConfig: fixture.loadConfig }));
