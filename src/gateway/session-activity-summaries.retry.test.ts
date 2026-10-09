@@ -127,6 +127,83 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     await testState.cleanup();
   });
 
+  it("supplies redacted native tool evidence alongside final text instead of only a prior recap", async () => {
+    const target = await addSession(0);
+    await persistSessionTranscriptTurn(scope(target), {
+      messages: [
+        {
+          eventId: "message-1",
+          parentId: "message-0",
+          message: { role: "assistant", content: "Outcome 1" },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    complete.mockResolvedValueOnce({
+      ...result,
+      text: "The request was refused because the tools do not exist.",
+    });
+    service.ensure(target);
+    await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+    const credential = "vck_synthetic_123456789012345678901234567890";
+    await persistSessionTranscriptTurn(scope(target), {
+      messages: [
+        {
+          eventId: "message-2",
+          parentId: "message-1",
+          message: {
+            role: "toolResult",
+            toolName: "decision_evaluate",
+            isError: false,
+            content: `Verified the decision. ${"Recorded detail. ".repeat(100)} OMITTED_MIDDLE ${"Recorded detail. ".repeat(100)} ${JSON.stringify(
+              [
+                { name: "AI_GATEWAY_API_KEY", kind: "env", valuePreview: credential },
+                { name: "PREVIEW_LABEL", kind: "env", valuePreview: "development" },
+              ],
+            )}`,
+          },
+        },
+        {
+          eventId: "message-3",
+          parentId: "message-2",
+          message: {
+            role: "toolResult",
+            toolName: "inspect_preview",
+            content: [{ type: "image", mimeType: "image/png", data: "fixture" }],
+          },
+        },
+        {
+          eventId: "message-4",
+          parentId: "message-3",
+          message: {
+            role: "assistant",
+            content: "The decision completed successfully.",
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    });
+    service.ensure(target);
+    await vi.waitFor(() => expect(view(target)?.state).toBe("current"));
+    const request = complete.mock.calls[1]![0];
+    const input = JSON.parse(request.prompt);
+    expect(input.messages).toContain("assistant: The decision completed successfully.");
+    expect(input.messages.join(" ")).toContain(
+      "toolResult (decision_evaluate, isError=false): Verified the decision.",
+    );
+    expect(input.messages).toContain(
+      "toolResult (inspect_preview, isError=unknown): (No text content recorded.)",
+    );
+    expect(request.prompt).not.toContain(credential);
+    expect(request.prompt).not.toContain("OMITTED_MIDDLE");
+    expect(
+      input.messages.find((note: string) => note.startsWith("toolResult")).length,
+    ).toBeLessThanOrEqual(920);
+    expect(request.systemPrompt).toContain(
+      "Transcript facts take precedence over the previous generated recap",
+    );
+  });
+
   it("rebuilds a dirty imported projection before retrying the recap", async () => {
     const target = { agentId: "main", key: "agent:main:unindexed-recap" };
     const transcript = scope(target);
