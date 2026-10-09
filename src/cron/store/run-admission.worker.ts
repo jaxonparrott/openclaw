@@ -2,11 +2,11 @@ import type { DatabaseSync } from "node:sqlite";
 import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
+import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { planCommandFailureRecovery } from "../service/command-failure-recovery.js";
 import { recomputeJobNextRunAtMs } from "../service/jobs-scheduling.js";
 import { retainManualOneShotOccurrence } from "../service/one-shot-schedule.js";
 import type { CronJobPolicyContext } from "../service/state.js";
@@ -47,6 +47,15 @@ import {
 } from "./runtime-mutation.worker.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
 import { releaseSchedulerReservationsInWorker } from "./scheduler-reservation.worker.js";
+
+const loadCommandRecovery = createLazyRuntimeModule(
+  () => import("../service/command-failure-recovery.js"),
+);
+let commandRecovery: typeof import("../service/command-failure-recovery.js") | undefined;
+
+export async function prepareCronReceiptRecoveryInWorker(): Promise<void> {
+  commandRecovery = await loadCommandRecovery();
+}
 
 function loadRuntimeRows(db: DatabaseSync, storeKey: string, jobIds: Iterable<string>) {
   const rows = loadCronRows(db, storeKey, new Set(jobIds), {
@@ -390,6 +399,10 @@ export function finishCronReceiptInWorker(
   database: OpenClawStateDatabase,
   input: CronRuntimeWorkerOperations["cron.finishReceipt"]["input"],
 ) {
+  const recovery = commandRecovery;
+  if (!recovery) {
+    throw new Error("Cron receipt recovery is not prepared");
+  }
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const preparation = prepareCronRuntimeMutation("cron.finishReceipt", input.nonce, {});
@@ -425,7 +438,7 @@ export function finishCronReceiptInWorker(
             }
           }
           const before = JSON.stringify(parent.state.failureRecovery);
-          const child = planCommandFailureRecovery(
+          const child = recovery.planCommandFailureRecovery(
             {
               deps: { nowMs: () => preparation.nowMs, log: createCronMutationLogger(outcome.logs) },
             },
