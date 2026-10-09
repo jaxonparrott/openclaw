@@ -727,10 +727,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         }
       }
       if (sawCustomJsonlEvent || partialOutput.text) {
-        const transcriptTextReceipt =
-          !sawCustomJsonlEvent && supportsCliJsonlToolEvents(params)
-            ? assistantTextReceipt?.read({ start: 0, sessionId })
-            : undefined;
+        const transcriptTextReceipt = !sawCustomJsonlEvent
+          ? assistantTextReceipt?.read({ start: 0, sessionId })
+          : undefined;
         return {
           ...partialOutput,
           ...(!sawCustomJsonlEvent && resumeCheckpointId ? { resumeCheckpointId } : {}),
