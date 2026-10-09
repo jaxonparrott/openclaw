@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-api.js";
 import type { CronJob } from "../../../../src/cron/types.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -33,6 +33,19 @@ describe("native command recovery Gateway authority", () => {
             },
           }),
         });
+        // Gateway readiness precedes asynchronous cron startup. Create the
+        // failure only after catch-up ends, so it is ordinary scheduled work.
+        await vi.waitFor(
+          async () => {
+            const logsDir = path.join(gateway.workspaceDir, "logs");
+            const names = (await fs.readdir(logsDir)).filter((name) => name.endsWith(".log"));
+            const logs = await Promise.all(
+              names.map((name) => fs.readFile(path.join(logsDir, name), "utf8")),
+            );
+            expect(logs.some((text) => text.includes('"cron: started"'))).toBe(true);
+          },
+          { timeout: 30_000, interval: 100 },
+        );
         const marker = `EVIDENCE_${randomUUID()}`;
         const evidencePath = path.join(gateway.workspaceDir, "authorized-evidence.txt");
         const authorityPath = path.join(gateway.workspaceDir, "authority-result.txt");
