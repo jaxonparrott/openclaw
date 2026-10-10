@@ -43,7 +43,7 @@ export function buildSubagentsStatusLine(params: {
   }
   const now = params.now ?? Date.now();
   const activeRuns = new Set(context.list.view.active);
-  let active = 0;
+  const active = activeRuns.size;
   const endedCounts = {
     done: 0,
     failed: 0,
@@ -54,29 +54,9 @@ export function buildSubagentsStatusLine(params: {
     "delivery pending": 0,
     "delivery blocked": 0,
   };
-  const detailLines: string[] = [];
   for (const entry of context.runs) {
     const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
-    if (activeRuns.has(entry)) {
-      active += 1;
-      if (detailLines.length >= 3) {
-        continue;
-      }
-      const startedAt = entry.execution.startedAt ?? entry.sessionStartedAt ?? entry.createdAt;
-      const durationMs = Math.max(
-        0,
-        (entry.execution.endedAt && pendingDescendants === 0 ? entry.execution.endedAt : now) -
-          startedAt,
-      );
-      const duration = formatDurationCompact(durationMs, { spaced: true }) ?? "0s";
-      const label = formatRunLabel(entry, { maxLength: 56 });
-      const executionText = formatExecutionObservation(context.getExecutionObservation(entry));
-      const descendantText =
-        pendingDescendants > 0
-          ? ` · ${pendingDescendants} child${pendingDescendants === 1 ? "" : "ren"} pending`
-          : "";
-      detailLines.push(`  • ${label} · ${duration} · ${executionText}${descendantText}`);
-    } else if (hasSubagentRunEnded(entry) && pendingDescendants === 0) {
+    if (!activeRuns.has(entry) && hasSubagentRunEnded(entry) && pendingDescendants === 0) {
       // Steer replacement is an internal restart, not user cancellation.
       const status = resolveSubagentSessionStatus(
         entry.suppressAnnounceReason === "steer-restart"
@@ -108,11 +88,29 @@ export function buildSubagentsStatusLine(params: {
   const endedParts = Object.entries(endedCounts)
     .filter(([, count]) => count > 0)
     .map(([label, count]) => `${count} ${label}`);
+
   if (active === 0) {
     return verboseEnabled && endedParts.length > 0
       ? `🤖 Subagents: 0 active · ${endedParts.join(" · ")}`
       : undefined;
   }
+  const detailLines = [...activeRuns].slice(0, 3).map((entry) => {
+    const pendingDescendants = context.list.pendingDescendants.get(entry.childSessionKey) ?? 0;
+    const startedAt = entry.execution.startedAt ?? entry.sessionStartedAt ?? entry.createdAt;
+    const durationMs = Math.max(
+      0,
+      (entry.execution.endedAt && pendingDescendants === 0 ? entry.execution.endedAt : now) -
+        startedAt,
+    );
+    const duration = formatDurationCompact(durationMs, { spaced: true }) ?? "0s";
+    const label = formatRunLabel(entry, { maxLength: 56 });
+    const executionText = formatExecutionObservation(context.getExecutionObservation(entry));
+    const descendantText =
+      pendingDescendants > 0
+        ? ` · ${pendingDescendants} child${pendingDescendants === 1 ? "" : "ren"} pending`
+        : "";
+    return `  • ${label} · ${duration} · ${executionText}${descendantText}`;
+  });
 
   const summary = `🤖 Subagents: ${active} active${endedParts.length > 0 ? ` · ${endedParts.join(" · ")}` : ""}`;
   return [summary, ...detailLines].join("\n");
