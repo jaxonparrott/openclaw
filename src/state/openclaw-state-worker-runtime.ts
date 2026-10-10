@@ -1,6 +1,7 @@
 import { importSandboxRegistryRow } from "../agents/sandbox/registry-import.worker.js";
 import { executeSandboxRegistryCommand } from "../agents/sandbox/registry-write.worker.js";
 import { persistSubagentRunChangesInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import { captureWorkspaceStateReceipt } from "../agents/workspace-state-publication.js";
 import { replaceWorkspaceAttestationInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { executeWorkspaceStateCommand } from "../agents/workspace-state-store.worker.js";
 import { readClawInstallSchemaVersionRows } from "../claws/provenance-runtime-read.kernel.js";
@@ -27,6 +28,7 @@ import {
   writeSecretStoreEntriesInDatabase,
   rollbackSecretStoreEntryWriteInDatabase,
   deleteSecretStoreEntryInDatabase,
+  updateSecretStoreAllowedHostsInDatabase,
 } from "../secrets/store/secret-store-write.js";
 import { executeSessionStateCommand } from "../sessions/session-state-events.worker.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
@@ -37,6 +39,7 @@ import { assertAgentDeletionRecoveryHoldPredicate } from "./agent-deletion-journ
 import {
   listAgentProvenanceInDatabase,
   readAgentProvenanceBatchInDatabase,
+  recordAgentProvenanceInDatabase,
 } from "./agent-provenance.kernel.js";
 import { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 import { recordBackupRunInDatabase } from "./backup-run-records.kernel.js";
@@ -176,18 +179,23 @@ export function executeSharedStateCommand(
     return importSandboxRegistryRow(command.input, writeOptions);
   }
   if (command.type === "workspace.replaceAttestation") {
-    return runOpenClawStateWriteTransaction((writer) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
-      return result;
-    }, writeOptions);
+    return runOpenClawStateWriteTransaction(
+      (writer) =>
+        captureWorkspaceStateReceipt(writer.db, () => {
+          requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+          const result = replaceWorkspaceAttestationInDatabase(writer, command.input);
+          requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+          assertAgentDeletionRecoveryHoldPredicate(writer, command.input.recoveryHoldPredicate);
+          return result;
+        }),
+      writeOptions,
+    );
   }
   if (
     command.type === "workspace.snapshotAndRegister" ||
     command.type === "workspace.mergeSetup" ||
-    command.type === "workspace.expire"
+    command.type === "workspace.expire" ||
+    command.type === "workspace.delete"
   ) {
     return executeWorkspaceStateCommand(command, database, writeOptions);
   }
@@ -213,6 +221,12 @@ export function executeSharedStateCommand(
       ? rollbackSecretStoreEntryWriteInDatabase({ ...command.input, database: writeOptions }, admit)
       : deleteSecretStoreEntryInDatabase({ ...command.input, database: writeOptions }, admit);
   }
+  if (command.type === "secrets.allowedHosts") {
+    return updateSecretStoreAllowedHostsInDatabase(
+      { ...command.input, database: writeOptions },
+      (stage) => requestSqliteWorkerOperationAdmission({ stage, facts: undefined }),
+    );
+  }
   if (command.type === "secrets.purge") {
     return purgeExpiredSecretStoreEntriesInDatabase(command.input, writeOptions);
   }
@@ -229,6 +243,14 @@ export function executeSharedStateCommand(
     return command.type === "agentProvenance.readBatch"
       ? readAgentProvenanceBatchInDatabase(database.db, command.input.agentIds)
       : listAgentProvenanceInDatabase(database.db);
+  }
+  if (command.type === "agentProvenance.record") {
+    ensureAgentProvenanceSchema(writeOptions);
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => recordAgentProvenanceInDatabase(db, command.input),
+      writeOptions,
+      { operationLabel: "agent-provenance.record" },
+    );
   }
   if (
     command.type === "sessionUpstream.current" ||

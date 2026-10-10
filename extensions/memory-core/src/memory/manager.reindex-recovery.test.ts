@@ -20,8 +20,9 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./test-runtime-mocks.js";
 import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import "./test-runtime-mocks.js";
+import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import { resetMemoryDatabase } from "./manager-db.js";
@@ -157,7 +158,11 @@ describe("memory manager reindex recovery", () => {
 
   async function openManager(cfg: OpenClawConfig): Promise<MemoryIndexManager> {
     const { getMemorySearchManager } = await import("./index.js");
-    const result = await getMemorySearchManager({ cfg, agentId: "main" });
+    const result = await getMemorySearchManager({
+      runInBackgroundContext: runInMemoryTestBackgroundContext,
+      cfg,
+      agentId: "main",
+    });
     if (!result.manager) {
       throw new Error(result.error ?? "manager missing");
     }
@@ -246,7 +251,9 @@ describe("memory manager reindex recovery", () => {
         expect(inputs.length).toBeGreaterThan(1);
         return inputs.map((_, index) => (index === 0 ? [0, 1, 0] : invalid));
       });
-    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow();
+    await expect(memoryManager.sync({ reason: "cli", force: true })).rejects.toThrow(
+      /openai embeddings failed \(model: mock-embed, batch size: \d+\): non-finite or non-numeric coordinate at position 1/,
+    );
     expect(harness.db.prepare("SELECT hash FROM memory_embedding_cache").all()).toEqual([]);
     await memoryManager.sync({ reason: "cli", force: true });
     expect(embed).toHaveBeenCalledTimes(2);
@@ -297,7 +304,9 @@ describe("memory manager reindex recovery", () => {
       ).toBeGreaterThan(0);
       reservation?.release();
       await reservation?.done;
-      await expect(sync).rejects.toThrow("malformed vector response");
+      await expect(sync).rejects.toThrow(
+        /openai embeddings failed \(model: mock-embed, batch size: \d+\): expected 2 dimensions, got 3 at position 0/,
+      );
     } finally {
       reservation?.release();
       await reservation?.done;

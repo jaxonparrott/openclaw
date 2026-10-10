@@ -42,6 +42,7 @@ import { withDeferredDebugProxyCapture } from "../proxy-capture/runtime-deferral
 import type { RuntimeEnv } from "../runtime.js";
 import { UpdateSchemaRefusalError } from "../state/openclaw-update-schema-refusal.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
+import { exitDoctorHealthFlow } from "./doctor-health-startup.js";
 
 // Interactive doctor entrypoint; lazy imports keep normal CLI startup light.
 const intro = (message: string) => clackIntro(stylePromptTitle(message) ?? message);
@@ -91,7 +92,7 @@ export async function runDoctorHealthFlow(
         const runDoctor = (capture?: DoctorConfigCapture) =>
           runDoctorHealthFlowWithResult(
             (selectedRuntime, code) => {
-              requestedExit = () => selectedRuntime.exit(code);
+              requestedExit = () => exitDoctorHealthFlow(selectedRuntime, code);
             },
             runtime,
             options,
@@ -126,7 +127,8 @@ async function runDoctorHealthFlowWithResult(
   resumeCapture?: () => void,
   preCaptureRehearsalRoot?: string,
 ) {
-  const { prepareDoctorHealthFlow } = await import("./doctor-health-startup.js");
+  const { prepareDoctorHealthFlow, prepareDoctorInteractiveMaintenance } =
+    await import("./doctor-health-startup.js");
   const { effectiveRuntime, repairRuntime, stateDirExistedAtStart, root } =
     await prepareDoctorHealthFlow(runtime, options, intro);
   let maintenance: Awaited<
@@ -163,8 +165,28 @@ async function runDoctorHealthFlowWithResult(
     };
     return true;
   };
+  const repairMode = resolveDoctorRepairMode(options);
+  let interactiveRepair = false;
+  let updateAdmissionComplete = false;
+  if (repairMode.canPrompt && !repairMode.shouldRepair) {
+    const admission = await prepareDoctorInteractiveMaintenance({
+      runtime: effectiveRuntime,
+      options,
+      databasePreflight,
+      root,
+      outro,
+    });
+    if (admission !== "accepted") {
+      if (admission !== "handled") {
+        requestExit(effectiveRuntime, admission.diagnosticExitCode);
+      }
+      return;
+    }
+    interactiveRepair = true;
+    updateAdmissionComplete = true;
+  }
   try {
-    if (options.repair === true || options.yes === true) {
+    if (options.repair === true || options.yes === true || interactiveRepair) {
       try {
         const { prepareDoctorDatabasePreflight } =
           await import("../commands/doctor-database-preflight.js");
@@ -190,6 +212,7 @@ async function runDoctorHealthFlowWithResult(
     maintenance = await measureGatewayBootstrapStep("doctor.maintenance.begin", () =>
       beginDoctorMaintenance({
         options,
+        interactiveRepair,
         root,
         runtime: repairRuntime,
         assertCurrent: writeAuthority?.assertCurrent,
@@ -215,7 +238,7 @@ async function runDoctorHealthFlowWithResult(
       });
       // Explicit repair never offers an update. Its current-state preflight remains
       // inside maintenance; diagnostic Doctor checks state before update admission.
-      if (!maintenance) {
+      if (!maintenance && !updateAdmissionComplete) {
         if (!databasePreflight) {
           await prepareDoctorDatabasePreflight({ scope: "state" });
         }
@@ -283,6 +306,8 @@ async function runDoctorHealthFlowWithResult(
         if (repairedState) {
           schemas = await prepareDoctorDatabasePreflight();
         }
+      }
+      if (maintenance) {
         const { backupDoctorMigrationDatabases } =
           await import("../commands/doctor-migration-backup.js");
         const { createOpenClawAgentDatabasePathMatcher } =
@@ -290,25 +315,24 @@ async function runDoctorHealthFlowWithResult(
         const { normalizeAgentId } = await import("../routing/session-key.js");
         const samePath = createOpenClawAgentDatabasePathMatcher();
         const discovery = schemas.agentDatabaseMigrationDiscovery?.discovery;
-        const databasePaths = discovery?.targets
-          .filter(
-            (database) =>
-              !schemas.agentRefusals?.some(
-                (refusal) =>
-                  normalizeAgentId(refusal.agentId) === normalizeAgentId(database.agentId) &&
-                  refusal.paths.some((pathname) => samePath(pathname, database.path)),
-              ) &&
-              !schemas.indeterminate.some(
-                (failure) =>
-                  failure.kind === "agent" &&
-                  (failure.path === database.path ||
-                    discovery.sourceIdentities.get(failure.path)?.realPath === database.realPath),
-              ),
-          )
-          .map((database) => database.path);
+        const databaseTargets = discovery?.targets.filter(
+          (database) =>
+            !schemas.agentRefusals?.some(
+              (refusal) =>
+                normalizeAgentId(refusal.agentId) === normalizeAgentId(database.agentId) &&
+                refusal.paths.some((pathname) => samePath(pathname, database.path)),
+            ) &&
+            !schemas.indeterminate.some(
+              (failure) =>
+                failure.kind === "agent" &&
+                (failure.path === database.path ||
+                  discovery.sourceIdentities.get(failure.path)?.realPath === database.realPath),
+            ),
+        );
         const backups = await backupDoctorMigrationDatabases({
           env: process.env,
-          databasePaths: databasePaths ?? [],
+          databasePaths: databaseTargets?.map((database) => database.path) ?? [],
+          agentDatabaseTargets: databaseTargets,
           pendingDatabasePaths: schemas.pendingMigrations?.map((database) => database.path) ?? [],
           verifiedSnapshots,
         });
@@ -424,7 +448,7 @@ async function runDoctorHealthFlowWithResult(
       if (recordConfigWriteRefusal(ctx)) {
         return undefined;
       }
-      if (options.repair === true || options.yes === true) {
+      if (maintenance) {
         const { validateDoctorExternalConfigForStartup } =
           await import("./doctor-external-config.js");
         if (!(await validateDoctorExternalConfigForStartup(effectiveRuntime))) {
