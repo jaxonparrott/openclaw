@@ -92,15 +92,25 @@ it.each([
       pluginId: "rewrite-output",
       hookName: "before_message_write",
       source: "test",
-      handler: ({ message }: PluginHookBeforeMessageWriteEvent) => ({
-        block,
-        message: {
-          ...(replacement ? {} : message),
-          role: message.role,
-          content: rewrite ? [{ type: "text", text: "Rewritten answer" }] : message.content,
-          display: true,
-        },
-      }),
+      handler: ({ message }: PluginHookBeforeMessageWriteEvent) => {
+        if (message.role !== "assistant") {
+          return { message };
+        }
+        const preparedMessage = { ...message };
+        if (replacement) {
+          Reflect.deleteProperty(preparedMessage, "__openclaw");
+        }
+        if (rewrite) {
+          preparedMessage.content = [{ type: "text", text: "Rewritten answer" }];
+        }
+        return {
+          block,
+          message: {
+            ...preparedMessage,
+            display: true,
+          },
+        };
+      },
     });
     initializeGlobalHookRunner(registry);
     const updates: InternalSessionTranscriptUpdate[] = [];
