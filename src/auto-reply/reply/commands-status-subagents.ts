@@ -2,7 +2,7 @@ import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
 // Formats subagent status rows for the status command response.
 import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
-import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
+import { resolveSubagentSessionStatus } from "../../agents/subagents/registry/subagent-session-metrics.js";
 import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatRunLabel } from "./subagents-utils.js";
@@ -49,6 +49,7 @@ export function buildSubagentsStatusLine(params: {
     failed: 0,
     "timed out": 0,
     cancelled: 0,
+    interrupted: 0,
     ended: 0,
     "delivery pending": 0,
     "delivery blocked": 0,
@@ -76,18 +77,22 @@ export function buildSubagentsStatusLine(params: {
           : "";
       detailLines.push(`  • ${label} · ${duration} · ${executionText}${descendantText}`);
     } else if (hasSubagentRunEnded(entry) && pendingDescendants === 0) {
-      const outcomeStatus = entry.execution.outcome?.status;
-      if (
-        entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
-        entry.suppressAnnounceReason !== "steer-restart"
-      ) {
+      // Steer replacement is an internal restart, not user cancellation.
+      const status = resolveSubagentSessionStatus(
+        entry.suppressAnnounceReason === "steer-restart"
+          ? { ...entry, endedReason: undefined }
+          : entry,
+      );
+      if (status === "killed") {
         endedCounts.cancelled += 1;
-      } else if (outcomeStatus === "ok") {
-        endedCounts.done += 1;
-      } else if (outcomeStatus === "timeout") {
-        endedCounts["timed out"] += 1;
-      } else if (outcomeStatus === "error") {
+      } else if (status === "interrupted") {
+        endedCounts.interrupted += 1;
+      } else if (status === "failed") {
         endedCounts.failed += 1;
+      } else if (status === "timeout") {
+        endedCounts["timed out"] += 1;
+      } else if (status === "done" && entry.execution.outcome?.status === "ok") {
+        endedCounts.done += 1;
       } else {
         endedCounts.ended += 1;
       }
