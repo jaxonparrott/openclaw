@@ -12,6 +12,7 @@ import type {
   SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.types.js";
 import type { SessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
+import { captureIncognitoSessionBinding } from "../../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../../config/sessions/session-store-owner.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -27,6 +28,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import type { StopReason } from "../../llm/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { CliOutput, CliUsage } from "../cli-output-contracts.js";
@@ -181,6 +183,20 @@ export async function persistCliAssistantTranscript(params: {
           }),
           prepareAssistantTranscriptMessage: runParams.prepareAssistantTranscriptMessage,
         });
+        if (message?.role === "assistant" && params.transcriptTextReceipt) {
+          const metadata = Reflect.get(message, "__openclaw");
+          const validCoverage = extractAssistantTranscriptSourceText(message) === params.text;
+          const nextMetadata: Record<string, unknown> =
+            typeof metadata === "object" && metadata !== null ? { ...metadata } : {};
+          // Preparation may replace the object; correspondence belongs to the
+          // producer and survives only while the accepted text is unchanged.
+          if (validCoverage) {
+            nextMetadata.cliAssistantTextReceipt = params.transcriptTextReceipt;
+          } else {
+            delete nextMetadata.cliAssistantTextReceipt;
+          }
+          Object.assign(message, { __openclaw: nextMetadata });
+        }
         return message
           ? projectAgentHarnessTranscriptMessageForDisplay({
               hidden: false,
@@ -254,6 +270,7 @@ function captureCliBlockFallbackWrite(
   expectedEntry: InternalSessionEntry,
 ) {
   const identity = { ...target };
+  const incognito = captureIncognitoSessionBinding(identity);
   const env = cloneEnvWithPlatformSemantics(process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const readScope = { ...identity, env } satisfies SessionTranscriptReadScope;
@@ -262,6 +279,34 @@ function captureCliBlockFallbackWrite(
     sessionKey: identity.sessionKey,
     sessionTarget: identity,
   });
+  if (incognito) {
+    const { actor } = incognito;
+    const claim = actor.sessions.captureCurrent(identity.sessionKey);
+    const cliWriter = getCliHistoryWriter({ ...identity, storePath: actor.path });
+    const { lifecycleRevision, activeWriterRunId } = expectedEntry;
+    const assertCurrent = () => {
+      assertOwnedWrite();
+      cliWriter?.assertCurrent();
+      incognito.admissionSignal?.throwIfAborted();
+      actor.assertCurrent();
+      claim.assertCurrent();
+      const current = actor.sessions.readSteering(identity.sessionKey);
+      if (
+        !current ||
+        current.sessionId !== identity.sessionId ||
+        current.lifecycleRevision !== lifecycleRevision ||
+        current.activeWriterRunId !== activeWriterRunId ||
+        (fence?.expectedLifecycleRevision !== undefined &&
+          current.lifecycleRevision !== fence.expectedLifecycleRevision) ||
+        (fence?.expectedWriterRunId !== undefined &&
+          current.activeWriterRunId !== fence.expectedWriterRunId)
+      ) {
+        throw new SessionTranscriptWriterClaimReboundError();
+      }
+    };
+    assertCurrent();
+    return { readScope: { ...identity, storePath: actor.path }, assertCurrent };
+  }
   const { normalizedKey } = resolveSessionEntrySelection(readScope, { readOnly: true });
   let source: SessionEntryReadSource | undefined;
   const captured = loadExactSessionEntryCandidates({
