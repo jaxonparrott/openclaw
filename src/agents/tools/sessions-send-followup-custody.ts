@@ -75,20 +75,22 @@ export async function prepareSessionsSendFollowup(params: {
     assertInvocation?.();
     const cfg = getRuntimeConfig();
     const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
-    const actor = resolveGatewayOperatorRoleActor(client ?? null);
-    if (!client || !actor) {
+    if (!client) {
       throw new Error("Followup has no retained original caller policy.");
     }
+    // Device-token and control-plane operators are admitted without a role actor or
+    // profile; they keep the Gateway's unidentified-operator policy on every check.
+    const actor = resolveGatewayOperatorRoleActor(client);
     const policyClient = {
       ...client,
       connect: { ...client.connect, scopes: [...(client.connect.scopes ?? [])] },
-      internal: { ...client.internal, operatorRoleActor: { ...actor } },
+      internal: { ...client.internal, ...(actor ? { operatorRoleActor: { ...actor } } : {}) },
     };
     const profile =
-      actor.kind === "operator"
+      actor?.kind === "operator"
         ? await prepareUserProfileRoleAuthority(actor.profileId)
         : undefined;
-    if (actor.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
+    if (actor?.kind === "operator" && (!profile || profile.profileId !== actor.profileId)) {
       throw new FollowupAccessChangedError("Followup requester profile is unavailable.");
     }
     assertInvocation?.();
@@ -127,10 +129,10 @@ export async function prepareSessionsSendFollowup(params: {
           currentFacts,
           {
             policy:
-              actor.kind === "system"
+              actor?.kind === "system"
                 ? undefined
                 : resolveOperatorRolePolicyForAssignment(
-                    actor.profileId,
+                    actor?.profileId,
                     profile?.role ?? null,
                     currentConfig,
                     profile?.githubLogin ?? null,
