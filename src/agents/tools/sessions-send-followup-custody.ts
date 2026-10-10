@@ -1,13 +1,13 @@
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  resolveGatewayOperatorRoleActor,
-  resolveOperatorRolePolicyForAssignment,
-} from "../../gateway/operator-role-policy.js";
-import {
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   retainGatewayDeviceRevocation,
 } from "../../gateway/device-revocation.js";
+import {
+  resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicyForAssignment,
+} from "../../gateway/operator-role-policy.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";

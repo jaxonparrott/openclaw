@@ -43,12 +43,12 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayClient } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
+import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import {
   hasCurrentGatewayPolicyClientSource,
   onGatewayPolicyClientInvalidated,
   type GatewayPolicyClient,
 } from "./server/ws-policy-close.js";
-import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { withPreparedSessionResolve } from "./sessions-resolve.js";
@@ -798,7 +798,13 @@ describe("accepted input Gateway instance retirement", () => {
             platform: "linux",
             mode: GATEWAY_CLIENT_MODES.BACKEND,
           },
-          device: { id: deviceId, publicKey: "key", signature: "signature", signedAt: 1, nonce: "n" },
+          device: {
+            id: deviceId,
+            publicKey: "key",
+            signature: "signature",
+            signedAt: 1,
+            nonce: "n",
+          },
         },
         internal: { authenticatedOperator: true },
       };
