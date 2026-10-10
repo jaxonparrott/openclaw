@@ -7,6 +7,7 @@ import {
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -52,7 +53,13 @@ export function createAgentTurnService(
   { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
   assertContextCurrent?: () => void,
 ) {
-  const startTurn = async ({
+  // A new run owns no caller's transcript. An in-process caller (a parent's tool
+  // launching a child) would otherwise leak its own writer claim into the child's
+  // preparation, queued execution and settlement, where it refuses the child's writes.
+  const startTurn = (request: AgentTurnStartRequest): Promise<void> =>
+    runWithoutOwnedSessionTranscriptWrites(() => startAdmittedTurn(request));
+
+  const startAdmittedTurn = async ({
     privateCompletion,
     settleWakeReplay,
     assertAdmissionCurrent,
