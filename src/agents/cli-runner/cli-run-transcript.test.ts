@@ -25,11 +25,57 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cli-coordination
 afterEach(() => resetGlobalHookRunner());
 
 it.each([
-  { sourceTool: "sessions_send", hidden: true },
-  { sourceTool: "subagent_announce", hidden: false },
+  {
+    sourceTool: "sessions_send",
+    hidden: true,
+    rewrite: false,
+    block: false,
+    prepare: false,
+    replacement: false,
+  },
+  {
+    sourceTool: "subagent_announce",
+    hidden: false,
+    rewrite: false,
+    block: false,
+    prepare: false,
+    replacement: false,
+  },
+  {
+    sourceTool: "subagent_announce",
+    hidden: false,
+    rewrite: false,
+    block: false,
+    prepare: false,
+    replacement: true,
+  },
+  {
+    sourceTool: "subagent_announce",
+    hidden: false,
+    rewrite: true,
+    block: false,
+    prepare: false,
+    replacement: true,
+  },
+  {
+    sourceTool: "subagent_announce",
+    hidden: false,
+    rewrite: false,
+    block: true,
+    prepare: false,
+    replacement: true,
+  },
+  {
+    sourceTool: "subagent_announce",
+    hidden: false,
+    rewrite: false,
+    block: false,
+    prepare: true,
+    replacement: false,
+  },
 ])(
-  "preserves CLI $sourceTool output with its display policy after hooks",
-  async ({ sourceTool, hidden }) => {
+  "preserves CLI $sourceTool receipts and display policy through replacement hooks",
+  async ({ sourceTool, hidden, rewrite, block, prepare, replacement }) => {
     const root = sessionDirs.make();
     const target = {
       agentId: "main",
@@ -46,9 +92,25 @@ it.each([
       pluginId: "rewrite-output",
       hookName: "before_message_write",
       source: "test",
-      handler: ({ message }: PluginHookBeforeMessageWriteEvent) => ({
-        message: { ...message, display: true },
-      }),
+      handler: ({ message }: PluginHookBeforeMessageWriteEvent) => {
+        if (message.role !== "assistant") {
+          return { message };
+        }
+        const preparedMessage = { ...message };
+        if (replacement) {
+          Reflect.deleteProperty(preparedMessage, "__openclaw");
+        }
+        if (rewrite) {
+          preparedMessage.content = [{ type: "text", text: "Rewritten answer" }];
+        }
+        return {
+          block,
+          message: {
+            ...preparedMessage,
+            display: true,
+          },
+        };
+      },
     });
     initializeGlobalHookRunner(registry);
     const updates: InternalSessionTranscriptUpdate[] = [];
@@ -64,6 +126,13 @@ it.each([
           runId: "cli-coordination-run",
           timeoutMs: 1_000,
           persistAssistantTranscript: true,
+          prepareAssistantTranscriptMessage: prepare
+            ? (message) => {
+                const preparedMessage = { ...message };
+                Reflect.deleteProperty(preparedMessage, "__openclaw");
+                return preparedMessage;
+              }
+            : undefined,
           inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
         },
         text: "The worker result passed validation",
@@ -84,6 +153,19 @@ it.each([
       const messages = (await loadTranscriptEvents(target)).flatMap((event) =>
         typeof event === "object" && event !== null && "message" in event ? [event.message] : [],
       );
+      if (block) {
+        expect(messages).toHaveLength(0);
+        expect(updates).toHaveLength(0);
+        return;
+      }
+      if (rewrite) {
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).not.toHaveProperty("__openclaw.cliAssistantTextReceipt");
+        expect(messages[0]).toMatchObject({
+          content: [{ type: "text", text: "Rewritten answer" }],
+        });
+        return;
+      }
       expect(messages).toMatchObject([
         {
           role: "assistant",
@@ -105,7 +187,9 @@ it.each([
       expect(Reflect.get(messages[0]!, "display") === false).toBe(hidden);
       expect(updates).toHaveLength(1);
       expect(Reflect.get(updates[0]!.message!, "display") === false).toBe(hidden);
-      expect(readSessionTranscriptRunId(updates[0]!.message)).toBe("cli-coordination-run");
+      if (!replacement && !prepare) {
+        expect(readSessionTranscriptRunId(updates[0]!.message)).toBe("cli-coordination-run");
+      }
     } finally {
       unsubscribe();
     }
