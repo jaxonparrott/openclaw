@@ -2,8 +2,8 @@ import { sanitizeRunStatusText } from "../../agents/run-status-text.js";
 import type { ControlledSubagentRunsReadContext } from "../../agents/subagents/registry/subagent-control-scope.js";
 // Formats subagent status rows for the status command response.
 import type { SubagentExecutionObservation } from "../../agents/subagents/registry/subagent-execution-observation.js";
-import { resolveSubagentSessionStatus } from "../../agents/subagents/registry/subagent-session-metrics.js";
 import { hasSubagentRunEnded } from "../../agents/subagents/registry/subagent-run-liveness.js";
+import { resolveSubagentSessionStatus } from "../../agents/subagents/registry/subagent-session-metrics.js";
 import { formatDurationCompact } from "../../infra/format-time/format-duration.ts";
 import { formatRunLabel } from "./subagents-utils.js";
 

@@ -238,31 +238,36 @@ describe("subagents status", () => {
     ["suspended", undefined, "1 failed · 1 delivery blocked"],
     ["discarded", undefined, "1 failed"],
     ["discarded", "intentional_non_delivery", "1 interrupted"],
-  ] as const)("preserves restart recovery status with %s delivery (%s)", async (status, disposition, expected) => {
-    seedSubagentRunForReadTest({
-      runId: "recovered",
-      childSessionKey: "agent:main:subagent:recovered",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "recovered worker",
-      cleanup: "keep",
-      expectsCompletionMessage: false,
-      createdAt: 1_000,
-      execution: {
-        status: "terminal",
-        startedAt: 1_000,
-        endedAt: 2_000,
-        outcome: { status: "error", error: "gateway restarted" },
-        interruptionReason: "gateway-restart",
-      },
-      delivery: { status, disposition },
-    });
-    expect(buildSubagentsStatusLine({
-      context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
-      verboseEnabled: true,
-      now: 5_000,
-    })).toBe(`🤖 Subagents: 0 active · ${expected}`);
-  });
+  ] as const)(
+    "preserves restart recovery status with %s delivery (%s)",
+    async (status, disposition, expected) => {
+      seedSubagentRunForReadTest({
+        runId: "recovered",
+        childSessionKey: "agent:main:subagent:recovered",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "recovered worker",
+        cleanup: "keep",
+        expectsCompletionMessage: false,
+        createdAt: 1_000,
+        execution: {
+          status: "terminal",
+          startedAt: 1_000,
+          endedAt: 2_000,
+          outcome: { status: "error", error: "gateway restarted" },
+          interruptionReason: "gateway-restart",
+        },
+        delivery: { status, disposition },
+      });
+      expect(
+        buildSubagentsStatusLine({
+          context: await controlScope.buildControlledSubagentRunsReadContext("agent:main:main"),
+          verboseEnabled: true,
+          now: 5_000,
+        }),
+      ).toBe(`🤖 Subagents: 0 active · ${expected}`);
+    },
+  );
 
   it("does not claim success for an ended run without a known successful outcome", async () => {
     seedSubagentRunForReadTest({
