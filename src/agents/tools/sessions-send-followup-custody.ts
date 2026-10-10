@@ -3,6 +3,11 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicyForAssignment,
 } from "../../gateway/operator-role-policy.js";
+import {
+  onGatewayDeviceSourceRevoked,
+  readGatewayDeviceSourceAuthority,
+  retainGatewayDeviceRevocation,
+} from "../../gateway/device-revocation.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { authorizePreparedSessionMutation } from "../../gateway/session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "../../gateway/session-sharing-preparation.js";
@@ -48,6 +53,8 @@ export async function prepareSessionsSendFollowup(params: {
   const revoked = new AbortController();
   const signal = AbortSignal.any([captured.signal, revoked.signal]);
   let stopAccessWatch: (() => void) | undefined;
+  let stopDeviceWatch: (() => void) | undefined;
+  let releaseDevice: (() => void) | undefined;
   let released = false;
   let observationReleased = false;
   let authorityReleased = true;
@@ -58,6 +65,8 @@ export async function prepareSessionsSendFollowup(params: {
     }
     released = true;
     stopAccessWatch?.();
+    stopDeviceWatch?.();
+    releaseDevice?.();
     for (const read of facts) {
       read.release();
     }
@@ -74,13 +83,22 @@ export async function prepareSessionsSendFollowup(params: {
   try {
     assertInvocation?.();
     const cfg = getRuntimeConfig();
-    const client = captured.run(() => getPluginRuntimeGatewayRequestScope()?.client);
+    const scope = captured.run(() => getPluginRuntimeGatewayRequestScope());
+    const client = scope?.client;
     if (!client) {
       throw new Error("Followup has no retained original caller policy.");
     }
     // Device-token and control-plane operators are admitted without a role actor or
     // profile; they keep the Gateway's unidentified-operator policy on every check.
     const actor = resolveGatewayOperatorRoleActor(client);
+    // Without operator run authority the continuation leaves the caller's device grant on
+    // its scope. Hold it here: revocation ends the followup, transport loss alone does not.
+    const deviceGuard = captured.operatorAuthority ? undefined : scope.hasCurrentClientAuthority;
+    releaseDevice = retainGatewayDeviceRevocation(deviceGuard);
+    const isDeviceSourceCurrent = readGatewayDeviceSourceAuthority(deviceGuard);
+    stopDeviceWatch = onGatewayDeviceSourceRevoked(deviceGuard, () =>
+      revoked.abort(new FollowupAccessChangedError("Followup caller access was revoked.")),
+    );
     const policyClient = {
       ...client,
       connect: { ...client.connect, scopes: [...(client.connect.scopes ?? [])] },
@@ -108,6 +126,9 @@ export async function prepareSessionsSendFollowup(params: {
         throw new Error("Followup completion custody was released.");
       }
       captured.assertCurrent();
+      if (isDeviceSourceCurrent?.() === false) {
+        throw new FollowupAccessChangedError("Followup caller access was revoked.");
+      }
       if (profile && !profile.isCurrent()) {
         throw new FollowupAccessChangedError("Followup requester identity changed.");
       }
