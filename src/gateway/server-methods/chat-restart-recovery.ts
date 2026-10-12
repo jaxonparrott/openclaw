@@ -9,7 +9,7 @@ import {
   resolveChannelResetConfig,
   resolveSessionResetType,
   resolveSessionWorkStartError,
-  type SessionEntry,
+  type InternalSessionEntry as SessionEntry,
 } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
