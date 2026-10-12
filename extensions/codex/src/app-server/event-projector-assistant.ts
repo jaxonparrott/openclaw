@@ -181,6 +181,15 @@ export class CodexAssistantProjection {
     }
   }
 
+  /** Codex deltas are best-effort; completed item text is authoritative (codex-rs TUI agrees). */
+  async streamCompletedItemTail(item: CodexThreadItem | undefined): Promise<void> {
+    const streamed = item?.type === "agentMessage" ? this.assistantTextByItem.get(item.id) : "";
+    // Without this, a dropped final delta leaves live and terminal chat text short.
+    if (streamed && typeof item?.text === "string" && item.text.startsWith(streamed)) {
+      await this.handleAssistantDelta({ itemId: item.id, delta: item.text.slice(streamed.length) });
+    }
+  }
+
   recordItemCompleted(
     item: CodexThreadItem | undefined,
     itemId: string | undefined,

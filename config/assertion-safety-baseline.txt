@@ -963,7 +963,7 @@ extensions/telegram/src/telegram-ingress-drain-factory.ts	1
 extensions/telegram/src/telegram-ingress-drain.ts	5
 extensions/telegram/src/telegram-ingress-spool.ts	1
 extensions/telegram/src/telegram-ingress-supersede-auth.ts	6
-extensions/telegram/src/telegram-ingress-supersede.ts	7
+extensions/telegram/src/telegram-ingress-supersede.ts	4
 extensions/telegram/src/telegram-ingress-worker.runtime.ts	3
 extensions/telegram/src/thread-bindings-store.ts	1
 extensions/telegram/src/topic-name-cache.ts	1
@@ -1119,7 +1119,7 @@ packages/ai/src/providers/tool-result-text.ts	2
 packages/ai/src/providers/tool-schema-json-projection.ts	2
 packages/ai/src/stream.ts	1
 packages/ai/src/transports/anthropic-compaction-replay.ts	2
-packages/ai/src/transports/anthropic-payload-policy.ts	7
+packages/ai/src/transports/anthropic-payload-policy.ts	5
 packages/ai/src/transports/anthropic-transport-stream.ts	4
 packages/ai/src/transports/openai-compatible-conversation-turn.ts	2
 packages/ai/src/transports/openai-completions-compat.ts	2
@@ -1161,7 +1161,7 @@ packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/client-info.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	4
-packages/gateway-protocol/src/protocol-validator.ts	2
+packages/gateway-protocol/src/protocol-validator.ts	1
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
@@ -1346,7 +1346,7 @@ src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
 src/agents/embedded-agent-runner/run/attempt-finalize.ts	2
 src/agents/embedded-agent-runner/run/attempt-history.ts	11
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	11
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	9
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -1385,8 +1385,8 @@ src/agents/embedded-agent-runner/thinking-replay-repair.ts	1
 src/agents/embedded-agent-runner/thinking.ts	19
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	3
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	7
-src/agents/embedded-agent-runner/tool-result-context-guard.ts	8
-src/agents/embedded-agent-runner/tool-result-truncation.ts	12
+src/agents/embedded-agent-runner/tool-result-context-guard.ts	7
+src/agents/embedded-agent-runner/tool-result-truncation.ts	8
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
@@ -1933,7 +1933,7 @@ src/config/context-visibility.ts	1
 src/config/defaults.ts	5
 src/config/doc-baseline.ts	6
 src/config/docs-config-examples.ts	1
-src/config/gateway-dispatch-config.ts	2
+src/config/gateway-dispatch-config.ts	1
 src/config/group-policy.ts	1
 src/config/implicit-mentions.ts	1
 src/config/io.audit.ts	2
@@ -2280,7 +2280,6 @@ src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2
-src/infra/net/node-proxy-agent.ts	1
 src/infra/net/proxy-fetch.ts	2
 src/infra/net/proxy/proxy-validation.ts	1
 src/infra/net/runtime-fetch.ts	5
@@ -2369,7 +2368,7 @@ src/infra/state-migrations.workspace-setup-store.ts	1
 src/infra/state-migrations.workspace-setup.ts	1
 src/infra/system-presence.ts	1
 src/infra/tailscale.ts	4
-src/infra/tmp-openclaw-dir.ts	3
+src/infra/tmp-openclaw-dir.ts	1
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
@@ -2533,8 +2532,7 @@ src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
 src/plugins/doctor-contract-module.ts	3
-src/plugins/doctor-contract-registry-loader-state.ts	1
-src/plugins/doctor-contract-registry.ts	2
+src/plugins/doctor-contract-registry.ts	1
 src/plugins/gateway-events.ts	1
 src/plugins/gateway-startup-plugin-activation.ts	1
 src/plugins/gateway-startup-plugin-config.ts	1

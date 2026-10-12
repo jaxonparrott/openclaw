@@ -19,7 +19,6 @@ import {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
-import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
@@ -56,6 +55,7 @@ import {
   hasTargetedSessionSyncParams,
 } from "./manager-sync-control.js";
 import { resolvePersistedMemoryVectorIndexState } from "./manager-vector-rebuild-state.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 
 const log = createSubsystemLogger("memory");
 
@@ -78,6 +78,13 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
   protected readonly cacheKey: string;
   protected readonly purpose: MemoryIndexManagerPurpose;
   protected override readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  private readonly backgroundRunner?: MemoryCoreRuntimeHost["runInBackgroundContext"];
+  protected readonly runInBackgroundContext = <T>(run: () => T): T => {
+    if (!this.backgroundRunner) {
+      throw new Error("Memory background work requires a plugin lifecycle owner");
+    }
+    return this.backgroundRunner(run);
+  };
   protected override readonly memoryFiles?: MemoryWorkspaceFiles;
   protected readonly cfg: OpenClawConfig;
   protected readonly agentId: string;
@@ -107,6 +114,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     purpose?: MemoryIndexManagerPurpose;
     inspectSources?: boolean;
     acquireLocalService?: MemoryCoreAcquireLocalService;
+    runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
     maintenanceSource?: MemoryIndexManager;
   }): Promise<MemoryIndexManager | null> {
     const source = params.maintenanceSource;
@@ -162,6 +170,8 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                     providerRequirement,
                     purpose,
                     acquireLocalService: params.acquireLocalService,
+                    runInBackgroundContext:
+                      source?.backgroundRunner ?? params.runInBackgroundContext,
                     maintenanceSource: source,
                     databaseOptions,
                   });
@@ -197,8 +207,12 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                 throw error;
               }
             },
-            reuse: ({ closing, closed, db, memoryFiles: files }) =>
-              !closing && !closed && db.isOpen && files === memoryFiles,
+            reuse: ({ closing, closed, db, memoryFiles: files, backgroundRunner }) =>
+              !closing &&
+              !closed &&
+              db.isOpen &&
+              files === memoryFiles &&
+              backgroundRunner === (source?.backgroundRunner ?? params.runInBackgroundContext),
           };
         },
       },
@@ -216,6 +230,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     providerRequirement: MemoryEmbeddingProviderRequirement;
     purpose: MemoryIndexManagerPurpose;
     acquireLocalService?: MemoryCoreAcquireLocalService;
+    runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
     maintenanceSource?: MemoryIndexManager;
     databaseOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0] & { path: string };
   }) {
@@ -226,6 +241,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     const dbPath = params.databaseOptions.path;
     this.cacheKey = params.cacheKey;
     this.acquireLocalService = params.acquireLocalService;
+    this.backgroundRunner = params.runInBackgroundContext;
     this.purpose = params.purpose;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
@@ -304,11 +320,15 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       }
       this.batch = this.resolveBatchConfig();
       if (!transient) {
-        runInMemoryBackgroundContext(() => {
+        this.runInBackgroundContext(() => {
           this.ensureWatcher();
           this.ensureSessionListener();
           this.ensureIntervalSync();
-          this.ensureSessionStartupCatchup();
+          void this.runInBackgroundContext(() => this.ensureSessionStartupCatchup()).catch(
+            (err: unknown) => {
+              log.warn("memory session startup catch-up failed: " + String(err));
+            },
+          );
         });
       }
     } catch (err) {

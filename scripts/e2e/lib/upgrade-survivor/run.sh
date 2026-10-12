@@ -358,6 +358,7 @@ const summary = {
   backupSchedule: process.env.SUMMARY_SCENARIO === "backup-schedule"
     ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "backup-schedule.json"))
     : undefined,
+  packageActivationRecovery: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "package-activation-recovery.json")),
   nativeAssignmentEligibility: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-eligibility.json")),
   nativeAssignments: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-proof.json"))
@@ -703,18 +704,23 @@ assert_prepublish_fixture_idle() {
     assert-no-requests "$OPENCLAW_CLAWHUB_URL"
 }
 
+prepublish_capability_consent_supported=""
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
-  local consent_supported=0 pending_args=("" "" "") published_companion_tarball=""
+  local consent_supported pending_args=("" "" "") published_companion_tarball=""
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     [ "$baseline_companion_availability" != "unavailable" ] || return 0
     plugin_id="discord"
   elif configured_plugin_installs_enabled; then
     plugin_id="matrix"
   fi
-  help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
-  consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return "$?"
-  [ -z "$consent" ] || consent_supported=1
+  if [ -z "$prepublish_capability_consent_supported" ]; then
+    help="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw plugins install --help)" || return "$?"
+    consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return "$?"
+    prepublish_capability_consent_supported=0
+    [ -z "$consent" ] || prepublish_capability_consent_supported=1
+  fi
+  consent_supported="$prepublish_capability_consent_supported"
   if [ "$allow_pending" = "1" ] && [ "$update_repair_required" = "1" ]; then
     pending_args=("$UPDATE_JSON" "$initial_update_observation_root" "$baseline_version")
   fi
@@ -988,7 +994,7 @@ initialize_state() {
 }
 
 seed_state() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed "$(package_root)"
 }
 
 apply_baseline_config_recipe() {
@@ -2233,6 +2239,11 @@ phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "package-publication-recovery" ] || [ "$SCENARIO" = "package-verification-recovery" ] || [ "$SCENARIO" = "package-stranded-first-hop" ]; then
+  source scripts/e2e/lib/upgrade-survivor/package-activation-recovery.sh
+  run_package_activation_recovery_survivor
+  exit 0
+fi
 if [ "$SCENARIO" = "backup-schedule" ]; then
   if [ "$baseline_spec" != "openclaw@2026.9.7" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
@@ -2619,7 +2630,16 @@ fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase capture-native-assignment-input node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs before-update
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Seed after baseline CLI work so only the published update can consume this legacy input.
+  phase seed-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-legacy-operator-pending-delivery
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-pending-delivery "$UPDATE_JSON" "$UPDATE_ERR"
+fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi

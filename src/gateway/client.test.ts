@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
-import type { ProxylineOptions } from "@openclaw/proxyline";
 // Gateway client tests cover WebSocket protocol negotiation, auth persistence,
 // proxy bypass setup, command dispatch, reconnect, and error handling.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
@@ -22,7 +21,13 @@ import {
 import { stopMockedProxylineHandles } from "../infra/net/proxy/proxyline.test-support.js";
 import { captureEnv } from "../test-utils/env.js";
 import type { GatewayClientOptions } from "./client.js";
-import { createAuthFailureMessage, firstMockArg, waitForFast } from "./client.test-support.js";
+import {
+  createAuthFailureMessage,
+  firstMockArg,
+  installGlobalProxyMock,
+  proxylineStopMock,
+  waitForFast,
+} from "./client.test-support.js";
 
 type MockLoggingConfig = {
   redactPatterns?: string[];
@@ -44,22 +49,6 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 const readLoggingConfigMock = vi.hoisted(() =>
   vi.fn<() => MockLoggingConfig | undefined>(() => undefined),
 );
-const { installGlobalProxyMock, proxylineStopMock } = vi.hoisted(() => {
-  const proxylineStopMockLocal = vi.fn();
-  return {
-    proxylineStopMock: proxylineStopMockLocal,
-    installGlobalProxyMock: vi.fn((_options: ProxylineOptions) => ({
-      active: true,
-      createNodeAgent: vi.fn(),
-      createUndiciDispatcher: vi.fn(),
-      createWebSocketAgent: vi.fn(),
-      explain: vi.fn(),
-      mode: "managed",
-      stop: proxylineStopMockLocal,
-      withBypass: vi.fn(),
-    })),
-  };
-});
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -163,8 +152,9 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: MockWebSocket,
 }));
 
-vi.mock("@openclaw/proxyline", () => ({
-  installGlobalProxy: installGlobalProxyMock,
+vi.mock("../infra/net/proxyline-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/proxyline-runtime.js")>()),
+  loadProxyline: () => ({ installGlobalProxy: installGlobalProxyMock }),
 }));
 
 vi.mock("../infra/device-auth-store.js", async () => {

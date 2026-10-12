@@ -409,12 +409,15 @@ export async function readSessionHistoryPageInWorker(
         capturedRequest.kind === "http" ||
         capturedRequest.kind === "delta" ||
         capturedRequest.kind === "inline-visibility"
-          ? await prepareGatewaySessionStoreReadSourcesAsync({
-              cfg,
-              currentSource,
-              env,
-              registryPath: stateContext.admission.databasePath,
-            })
+          ? await prepareGatewaySessionStoreReadSourcesAsync(
+              {
+                cfg,
+                currentSource,
+                env,
+                registryPath: stateContext.admission.databasePath,
+              },
+              signal,
+            )
           : undefined;
       const primaryPath = sourceReads ? undefined : createOpenClawAgentDatabasePathMatcher();
       primaryPath?.(currentSource.path, currentSource.path);
@@ -564,6 +567,7 @@ export async function readSessionHistoryPageInWorker(
             {
               readOnly,
               assertCurrent,
+              signal,
               coldRead: {
                 target: preparedTarget,
                 readMetadata: async (phase) => {
@@ -576,10 +580,13 @@ export async function readSessionHistoryPageInWorker(
                           owner,
                           signal,
                         )
-                      : await owner.readColdMetadata({
-                          sessionId: metadataInput.sessionId,
-                          env,
-                        });
+                      : await owner.readColdMetadata(
+                          {
+                            sessionId: metadataInput.sessionId,
+                            env,
+                          },
+                          signal,
+                        );
                   assertCurrent();
                   if (metadata.kind !== "cold-metadata") {
                     throw new Error(

@@ -12,7 +12,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { renderNotificationsSection } from "../pages/config/notifications-section.ts";
 import { createConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.ts";
-import { createWebPushCapability } from "./web-push.ts";
+import { createWebPushCapability, type WebPushCapability } from "./web-push.ts";
 
 const originalServiceWorkerDescriptor = Object.getOwnPropertyDescriptor(
   Navigator.prototype,
@@ -134,6 +134,19 @@ function gatewayClient(vapidPublicKey: Promise<string>) {
   return { client: { request } as unknown as GatewayBrowserClient, request };
 }
 
+function nextPreferencesPublication(capability: WebPushCapability, signal: AbortSignal) {
+  const published = createDeferred<WebPushNotificationPreferences>();
+  const stop = capability.subscribe(() => {
+    const { error, preferences } = capability.snapshot;
+    if (error != null) {
+      published.reject(new Error(error));
+    } else if (preferences) {
+      published.resolve(preferences.user);
+    }
+  });
+  return withinTest(published.promise, signal).finally(stop);
+}
+
 describe("web push Gateway reconciliation", () => {
   beforeEach(() => {
     const subscription = existingSubscription([4, 1, 2, 3]);
@@ -242,8 +255,11 @@ describe("web push Gateway reconciliation", () => {
     coordinator.reset();
   });
 
-  it("serializes rapid preference edits without dropping the latest full object", async () => {
+  it("serializes rapid preference edits without dropping the latest full object", async ({
+    signal,
+  }) => {
     const firstSave = createDeferred();
+    const firstSaveStarted = createDeferred();
     const first = notificationPreferences(true);
     const second = notificationPreferences(false);
     let stored = first;
@@ -261,6 +277,7 @@ describe("web push Gateway reconciliation", () => {
       if (method === "push.web.preferences.set") {
         saveCount += 1;
         if (saveCount === 1) {
+          firstSaveStarted.resolve();
           await firstSave.promise;
         }
         stored = (params as { preferences: WebPushNotificationPreferences }).preferences;
@@ -270,27 +287,36 @@ describe("web push Gateway reconciliation", () => {
     });
     const harness = gatewayHarness();
     const capability = createWebPushCapability(harness.gateway);
-    harness.connect({ request } as unknown as GatewayBrowserClient);
-    await vi.waitFor(() => expect(capability.snapshot.preferences).toBeTruthy());
-    request.mockClear();
+    const initialPreferences = nextPreferencesPublication(capability, signal);
+    try {
+      harness.connect({ request } as unknown as GatewayBrowserClient);
+      expect(await initialPreferences).toEqual(first);
+      request.mockClear();
 
-    const firstOperation = capability.run({ kind: "set", scope: "user", preferences: first });
-    await vi.waitFor(() =>
-      expect(request).toHaveBeenCalledWith(
-        "push.web.preferences.set",
-        expect.objectContaining({ preferences: first }),
-      ),
-    );
-    const secondOperation = capability.run({ kind: "set", scope: "user", preferences: second });
-    firstSave.resolve();
+      const firstOperation = capability.run({ kind: "set", scope: "user", preferences: first });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          firstSaveStarted.promise,
+          firstOperation,
+          "Preference action settled before requesting its save.",
+        ),
+        signal,
+      );
+      const secondOperation = capability.run({ kind: "set", scope: "user", preferences: second });
+      firstSave.resolve();
 
-    await Promise.all([firstOperation, secondOperation]);
-    expect(request.mock.calls.filter(([method]) => method === "push.web.preferences.set")).toEqual([
-      ["push.web.preferences.set", expect.objectContaining({ preferences: first })],
-      ["push.web.preferences.set", expect.objectContaining({ preferences: second })],
-    ]);
-    expect(capability.snapshot.preferences?.user).toEqual(second);
-    capability.dispose();
+      await Promise.all([firstOperation, secondOperation]);
+      expect(
+        request.mock.calls.filter(([method]) => method === "push.web.preferences.set"),
+      ).toEqual([
+        ["push.web.preferences.set", expect.objectContaining({ preferences: first })],
+        ["push.web.preferences.set", expect.objectContaining({ preferences: second })],
+      ]);
+      expect(capability.snapshot.preferences?.user).toEqual(second);
+    } finally {
+      firstSave.resolve();
+      capability.dispose();
+    }
   });
 
   it("refreshes routed canonical profile defaults without publishing a stale invalidation", async ({
@@ -324,20 +350,8 @@ describe("web push Gateway reconciliation", () => {
     });
     const harness = gatewayHarness();
     const capability = createWebPushCapability(harness.gateway);
-    const nextPreferencesPublication = () => {
-      const published = createDeferred<WebPushNotificationPreferences>();
-      const stop = capability.subscribe(() => {
-        const { error, preferences } = capability.snapshot;
-        if (error != null) {
-          published.reject(new Error(error));
-        } else if (preferences) {
-          published.resolve(preferences.user);
-        }
-      });
-      return withinTest(published.promise, signal).finally(stop);
-    };
     try {
-      const initialPublication = nextPreferencesPublication();
+      const initialPublication = nextPreferencesPublication(capability, signal);
       harness.connect({ request } as unknown as GatewayBrowserClient, "profile-owner");
       expect(await initialPublication).toEqual(initial);
 
@@ -353,7 +367,7 @@ describe("web push Gateway reconciliation", () => {
         event: "users.prefs.changed",
         payload: { profileId: "canonical-profile", keys: ["notifications.web.v1"] },
       };
-      const latestPublication = nextPreferencesPublication();
+      const latestPublication = nextPreferencesPublication(capability, signal);
       harness.emit(invalidation);
       await withinTest(
         awaitGateBeforeSettlement(
@@ -376,12 +390,18 @@ describe("web push Gateway reconciliation", () => {
     }
   });
 
-  it("reruns full reconciliation when preferences change during initial connection", async () => {
+  it("reruns full reconciliation when preferences change during initial connection", async ({
+    signal,
+  }) => {
     const firstKey = createDeferred<string>();
+    const firstKeyRequested = createDeferred();
     let vapidRead = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "push.web.vapidPublicKey") {
         vapidRead += 1;
+        if (vapidRead === 1) {
+          firstKeyRequested.resolve();
+        }
         return {
           vapidPublicKey: vapidRead === 1 ? await firstKey.promise : encodedVapidKey([4, 1, 2, 3]),
         };
@@ -396,23 +416,34 @@ describe("web push Gateway reconciliation", () => {
     });
     const harness = gatewayHarness();
     const capability = createWebPushCapability(harness.gateway);
-    harness.connect({ request } as unknown as GatewayBrowserClient, "profile-owner");
-    await vi.waitFor(() => expect(vapidRead).toBe(1));
+    const reconciled = nextPreferencesPublication(capability, signal);
+    try {
+      harness.connect({ request } as unknown as GatewayBrowserClient, "profile-owner");
+      await withinTest(
+        awaitGateBeforeSettlement(
+          firstKeyRequested.promise,
+          reconciled,
+          "Reconciliation settled before requesting its VAPID key.",
+        ),
+        signal,
+      );
+      expect(vapidRead).toBe(1);
 
-    harness.emit({
-      type: "event",
-      event: "users.prefs.changed",
-      payload: { profileId: "profile-owner", keys: ["notifications.web.v1"] },
-    });
+      harness.emit({
+        type: "event",
+        event: "users.prefs.changed",
+        payload: { profileId: "profile-owner", keys: ["notifications.web.v1"] },
+      });
 
-    await vi.waitFor(() => expect(vapidRead).toBe(2));
-    await vi.waitFor(() =>
-      expect(capability.snapshot.preferences?.user).toEqual(notificationPreferences(false)),
-    );
-    firstKey.resolve(encodedVapidKey([4, 9, 8, 7]));
-    await Promise.resolve();
-    expect(capability.snapshot.error).toBeNull();
-    capability.dispose();
+      expect(await reconciled).toEqual(notificationPreferences(false));
+      expect(vapidRead).toBe(2);
+      firstKey.resolve(encodedVapidKey([4, 9, 8, 7]));
+      await Promise.resolve();
+      expect(capability.snapshot.error).toBeNull();
+    } finally {
+      firstKey.resolve(encodedVapidKey([4, 9, 8, 7]));
+      capability.dispose();
+    }
   });
 
   it.each([

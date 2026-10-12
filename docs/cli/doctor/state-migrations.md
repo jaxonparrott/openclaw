@@ -9,6 +9,14 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+For a named channel account no longer present in account discovery, Doctor moves
+its legacy `credentials/<channel>-<account>-allowFrom.json` file to the existing
+`.migrated` archive path (numbered if occupied), reports both paths as a warning,
+and continues later migrations. The original bytes remain available for recovery;
+they are not assigned to a surviving account. Malformed allowlists for configured
+accounts and ambiguous account identities still require repair before migration
+can continue. Update-time Doctor uses the same behavior.
+
 Matrix's one-time inbound dedupe scan applies only when Matrix is configured or
 legacy Matrix state needs inspection. A fresh installation with neither does not
 need a Matrix migration or exclusive Gateway maintenance. Completed scans keep a
@@ -76,6 +84,10 @@ memory-flush fields to their current structured state. Published
 `v2026.7.2-beta.5` wrote these fields directly into schema-v16 session rows;
 stable `v2026.8.1` upgrades retain those stored values. This durable upgrade
 path needs a migration even though current writers already emit structured state.
+Legacy `sessions.json` imports apply the same conversion before writing SQLite,
+preserving exact session IDs and archiving the original JSON bytes. This also
+runs during update-time Doctor, so flat pending-delivery fields no longer block
+the import with a repeated request to run `doctor --fix`.
 Before rewriting an
 existing database, it saves and reports a verified SQLite backup, including the
 original row values. Pending reply text, destinations, intent IDs, timestamps,
@@ -174,6 +186,18 @@ path preserves unknown deletion history; retained external stores still need Doc
 reconstruction before maintenance.
 Verified fresh SQLite setup initializes the journal normally, without a missing-history
 warning. Legacy JSON session files alone do not require journal reconstruction.
+Agent-directory discovery selects `openclaw-agent.sqlite` and the reserved
+`incognito-openclaw-agent.sqlite` name from the agent path owner; custom database
+names need a configured store, registry entry, or recorded deletion path.
+Incognito runtime state stays in memory. An existing file at its reserved path
+is a collision that recovery must inventory and protect, not replace or silently
+activate as an in-memory store. Normal incognito admission still requires moving
+or renaming that file before retrying.
+Sibling reindex locks, captures, and SQLite sidecars are not separate agent stores.
+Canonical database sidecars still preserve evidence of a missing main database.
+Previously recorded coordination-file holds remain preserved in recovery receipts
+but do not produce held-agent warnings. The reindex lock file can remain after
+its SQLite lease is released; its presence does not mean an agent was deleted.
 Session SQLite import and recovery hold existing agent databases and their sidecars
 when deletion history is unavailable, preserving legacy sources without importing
 or archiving them. Recorded deletion and reconstruction holds and retained plugin
@@ -252,6 +276,18 @@ warnings with the total count and at most five example paths per database.
 Media and historical transcript migrations still complete, retain the canonical
 SQLite blobs, and leave deleted copies absent. These warnings do not block the
 remaining migration steps or database readiness.
+
+Canonical archive repairs commit changed blobs in bounded batches before repairing
+their file copies. Publication metadata and the historical migration cursor commit
+together after that batch is verified. Enumeration advances through the complete
+archive key, including empty historical session IDs. A failed batch reports its archive session
+and generation and stops; rerunning Doctor resumes after the committed cursor.
+Blobs already committed before a file or cursor failure remain retained and pending
+publication. SIGINT and SIGTERM cancel further inspection and repair batches through Doctor's existing
+maintenance owner, which settles open work and attempts to restore the managed
+Gateway it stopped. Doctor reports restoration failures and the next recovery
+action. Updates use the same migration and keep their existing backup and rollback
+ownership.
 
 Doctor shares its initial fleet schema and ownership inspection across the update
 guard and admission checks. Database readers use a bounded worker pool, including

@@ -1,6 +1,9 @@
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as groups from "../process/child-process-tree.js";
 import { spawnCommand, withCommandProcessScope } from "../process/exec-spawn.js";
@@ -17,6 +20,50 @@ const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+});
+
+it.skipIf(process.platform === "win32").each([
+  { name: "legacy updater without a run ID", runId: undefined, admitted: true },
+  { name: "current updater", runId: "current-update-run", admitted: true },
+  { name: "invalid current run ID", runId: "x".repeat(4097), admitted: false },
+])("admits Doctor commands with $name only with valid custody", async ({ runId, admitted }) => {
+  const root = fs.realpathSync(directories.make("doctor-run-id-custody-"));
+  const privateTmp = path.join(root, "private-tmp");
+  fs.mkdirSync(privateTmp, { mode: 0o700 });
+  const { databasePath } = installPrivateUpdateHandoffStore(privateTmp);
+  const resultPath = path.join(root, "result.json");
+  const receiptPath = `${resultPath}.processes`;
+  const effect = path.join(root, "command-effect");
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv(UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV, resultPath);
+  vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", runId);
+  vi.spyOn(packageRoot, "resolveOpenClawPackageRoot").mockResolvedValue(root);
+  const store = createManagedHandoffLeaseStore({ databasePath, serviceManagerEnv: {} });
+  {
+    using custody = await retainUpdateDoctorProcesses();
+    expect(custody).toBeDefined();
+    const dispatch = withCommandProcessScope(
+      async () =>
+        await spawnCommand([
+          process.execPath,
+          "-e",
+          `require('node:fs').writeFileSync(${JSON.stringify(effect)}, 'completed')`,
+        ]),
+      undefined,
+      custody,
+    );
+    if (admitted) {
+      await dispatch;
+      expect(fs.readFileSync(effect, "utf8")).toBe("completed");
+    } else {
+      await expect(dispatch).rejects.toThrow("managed handoff admission is invalid");
+      expect(fs.existsSync(effect)).toBe(false);
+    }
+    expect(JSON.parse(fs.readFileSync(receiptPath, "utf8"))).toMatchObject({ slots: [] });
+    expect(store.readCommandChildren([root])).toEqual([]);
+  }
+  expect(fs.existsSync(receiptPath)).toBe(false);
+  expect(store.read(root).kind).toBe("absent");
 });
 
 it("permits no-child Doctor work without an installation root while refusing writer admission", async () => {
@@ -124,6 +171,89 @@ it.skipIf(process.platform === "win32").each(["reservation-before-ipc", "retired
     } finally {
       reservation?.settled();
       doctorNative.releaseAnchors();
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "settles an exited Doctor's empty receipt while foreign live custody still blocks replacement",
+  async () => {
+    const root = directories.make("doctor-foreign-custody-");
+    const roots = [root, path.join(root, "candidate")];
+    const resultPath = path.join(root, "doctor-result.json");
+    const peer = nativeCustody.createManagedCommandProcessCustody({
+      roots,
+      runId: "doctor-b",
+      databasePath: path.join(root, "handoffs.sqlite"),
+    });
+    const parent = createUpdateDoctorProcessCustody("doctor-a", root, resultPath, {
+      roots,
+      databaseIdentity: peer.databaseIdentity,
+    });
+    const doctor = spawnSync(process.execPath, [
+      "-e",
+      "const fs = require('node:fs'); const file = process.argv[1]; " +
+        "const receipt = JSON.parse(fs.readFileSync(file, 'utf8')); " +
+        "receipt.pid = process.pid; fs.writeFileSync(file, JSON.stringify(receipt));",
+      `${resultPath}.processes`,
+    ]);
+    expect(doctor.error).toBeUndefined();
+    expect(doctor.status).toBe(0);
+    expect(JSON.parse(fs.readFileSync(`${resultPath}.processes`, "utf8"))).toMatchObject({
+      pid: doctor.pid,
+      slots: [],
+    });
+    const argv = [process.execPath, "-e", "process.stdin.resume()"];
+    const reservation = peer.custody.reserve(argv);
+    const writer = spawn(process.execPath, argv.slice(1), {
+      detached: true,
+      stdio: ["pipe", "ignore", "ignore"],
+    });
+    const closed = once(writer, "close");
+    const store = createManagedHandoffLeaseStore({
+      databasePath: peer.databasePath,
+      existingIdentity: peer.databaseIdentity,
+      serviceManagerEnv: {},
+    });
+    try {
+      await once(writer, "spawn");
+      if (!writer.pid) {
+        throw new Error("Missing peer command PID");
+      }
+      reservation.spawned({ pid: writer.pid, startedAt: null });
+      const claims = store.readCommandChildren(roots);
+      expect(claims).toHaveLength(roots.length);
+      const settlement = await parent.settle({
+        pid: doctor.pid,
+        code: 0,
+        cleanup: "normal",
+        termination: "exit",
+      });
+      expect(settlement, settlement?.stderrTail ?? undefined).toMatchObject({
+        exitCode: 0,
+        diagnostics: [expect.stringContaining(`foreign custody, owned by Doctor ${process.pid}`)],
+      });
+      expect(settlement?.advisory).toBeUndefined();
+      parent.close();
+      expect(fs.existsSync(`${resultPath}.processes`)).toBe(false);
+      expect(groups.isChildProcessTreeAlive({ pid: writer.pid })).toBe(true);
+      expect(store.readCommandChildren(roots)).toEqual(claims);
+      for (const installRoot of roots) {
+        expect(store.acquire(installRoot, "replacement", { kind: "update" }).kind).toBe("busy");
+      }
+    } finally {
+      writer.stdin?.end();
+      await closed;
+      reservation.settled();
+      peer.releaseAnchors();
+      parent.close();
+    }
+    for (const installRoot of roots) {
+      const replacement = store.acquire(installRoot, "replacement", { kind: "update" });
+      expect(replacement.kind).toBe("acquired");
+      if (replacement.kind === "acquired") {
+        expect(store.release(replacement.lease)).toBe(true);
+      }
     }
   },
 );

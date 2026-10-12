@@ -149,6 +149,8 @@ const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
 const RETRYABLE_WEBSOCKET_CLOSE_CODES = new Set([1001, 1005, 1006, 1011, 1012, 1013, 1014, 1015]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
 const WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE = "websocket_connection_limit_reached";
+const WEBSOCKET_REPLAY_REJECTION =
+  "Codex error: Persisted response contains hosted-tool, compaction, or unverifiable hidden reasoning state that Rustponses cannot replay. Start a new response or use the Python Responses service for this continuation.";
 const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 
 interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
@@ -161,20 +163,6 @@ interface OpenAICodexResponsesOptions extends BaseOpenAIStreamOptions {
 type ObserveResponsesPromptEgress = NonNullable<
   ReturnType<typeof createResponsesPromptEgressObserver>
 >;
-
-function buildRequestSignal(
-  baseSignal: AbortSignal | undefined,
-  timeoutMs: number | undefined,
-): AbortSignal | undefined {
-  if (timeoutMs === undefined) {
-    return baseSignal;
-  }
-  const timeoutSignal = AbortSignal.timeout(timeoutMs);
-  if (!baseSignal) {
-    return timeoutSignal;
-  }
-  return AbortSignal.any([baseSignal, timeoutSignal]);
-}
 
 function isRequestTimeoutError(
   error: unknown,
@@ -296,7 +284,13 @@ export const streamOpenAICodexResponses: StreamFunction<
       // Without a session id, each WebSocket request gets independent affinity.
       const sessionId = clampOpenAIPromptCacheKey(options?.sessionId);
       requestTimeoutMs = clampPositiveTimerTimeoutMs(options?.timeoutMs);
-      requestTimeoutSignal = buildRequestSignal(options?.signal, requestTimeoutMs);
+      requestTimeoutSignal = options?.signal;
+      if (requestTimeoutMs !== undefined) {
+        const timeoutSignal = AbortSignal.timeout(requestTimeoutMs);
+        requestTimeoutSignal = options?.signal
+          ? AbortSignal.any([options.signal, timeoutSignal])
+          : timeoutSignal;
+      }
       firstEventAbort = createFirstStreamEventAbortController(requestTimeoutSignal);
       activeSignal = firstEventAbort.signal;
       const requestOptions =
@@ -341,12 +335,11 @@ export const streamOpenAICodexResponses: StreamFunction<
 
       if (websocketAuthority && !websocketDisabledForSession) {
         let websocketStarted = false;
-        let websocketRequestSent = false;
-        let retriedWebSocketConnectionLimit = false;
+        let retriedWebSocketRejection = false;
         while (true) {
           const activeAttempt = semanticAttempt;
+          const dispatch: { request?: RequestBody } = {};
           websocketStarted = false;
-          websocketRequestSent = false;
           try {
             const terminal = await processWebSocketStream(
               websocketState,
@@ -365,8 +358,8 @@ export const streamOpenAICodexResponses: StreamFunction<
               firstEventAbort.abort,
               observePromptEgress,
               activeAttempt.kind,
-              () => {
-                websocketRequestSent = true;
+              (request) => {
+                dispatch.request = request;
               },
               options?.signal,
             );
@@ -400,7 +393,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             // be classified as provider rejection of encrypted replay state.
             const nextSemanticAttempt =
               !aborted &&
-              websocketRequestSent &&
+              dispatch.request &&
               !websocketStarted &&
               error instanceof CodexApiError &&
               isInvalidEncryptedContentError(error)
@@ -410,21 +403,35 @@ export const streamOpenAICodexResponses: StreamFunction<
                 : undefined;
             if (nextSemanticAttempt) {
               semanticAttempt = nextSemanticAttempt;
-              retriedWebSocketConnectionLimit = false;
+              retriedWebSocketRejection = false;
               continue;
             }
             const connectionLimitBeforeStart =
               !websocketStarted && isWebSocketConnectionLimitReachedError(error);
-            if (!aborted && connectionLimitBeforeStart && !retriedWebSocketConnectionLimit) {
-              retriedWebSocketConnectionLimit = true;
+            // Releasing the rejected socket discards its continuation. Retry the
+            // retained full input, including completed tools, without stripping state.
+            const reconnectBeforeStart =
+              connectionLimitBeforeStart ||
+              (!websocketStarted &&
+                dispatch.request?.previous_response_id &&
+                error instanceof CodexApiError &&
+                error.message === WEBSOCKET_REPLAY_REJECTION);
+            if (!aborted && reconnectBeforeStart && !retriedWebSocketRejection) {
+              retriedWebSocketRejection = true;
               continue;
             }
-            if (aborted || (isCodexNonTransportError(error) && !connectionLimitBeforeStart)) {
-              throw error;
+            // After output starts, the runner must continue the transcript instead of replaying.
+            const transportError = isWebSocketConnectionLimitReachedError(error)
+              ? Object.assign(new Error(error.message, { cause: error }), {
+                  code: WEBSOCKET_TRANSPORT_ERROR_CODE,
+                })
+              : error;
+            if (aborted || isCodexNonTransportError(transportError)) {
+              throw transportError;
             }
             appendAssistantMessageDiagnostic(
               output,
-              createAssistantMessageDiagnostic("provider_transport_failure", error, {
+              createAssistantMessageDiagnostic("provider_transport_failure", transportError, {
                 configuredTransport: transport,
                 fallbackTransport: transport === "auto" && !websocketStarted ? "sse" : undefined,
                 eventsEmitted: websocketStarted,
@@ -443,7 +450,7 @@ export const streamOpenAICodexResponses: StreamFunction<
               );
             }
             if (websocketStarted || transport !== "auto") {
-              throw error;
+              throw transportError;
             }
             break;
           }
@@ -823,7 +830,7 @@ function isCodexNonTransportError(error: unknown): boolean {
   );
 }
 
-function isWebSocketConnectionLimitReachedError(error: unknown): boolean {
+function isWebSocketConnectionLimitReachedError(error: unknown): error is CodexApiError {
   return error instanceof CodexApiError && error.code === WEBSOCKET_CONNECTION_LIMIT_REACHED_CODE;
 }
 
@@ -1311,7 +1318,7 @@ async function processWebSocketStream(
   abortFirstEventStream?: (reason: Error) => void,
   observePromptEgress?: ObserveResponsesPromptEgress,
   payloadVariant: ResponsesEncryptedContentAttempt<RequestBody>["kind"] = "initial",
-  onRequestSent?: () => void,
+  onRequestSent?: (request: RequestBody) => void,
   // Stream progress must be reported on the caller's signal: the runner idle
   // watchdog listens there, while `options.signal` here is the request-scoped
   // abort composite that nothing outside this provider observes.
@@ -1346,7 +1353,7 @@ async function processWebSocketStream(
       lifecycle.assertCurrent();
     }
     socket.send(JSON.stringify({ type: "response.create", ...requestBody }));
-    onRequestSent?.();
+    onRequestSent?.(requestBody);
     const terminal = await processResponsesStream(
       startWebSocketOutputOnFirstEvent(
         mapCodexEvents(parseWebSocket(socket, options?.signal), undefined, options),

@@ -64,6 +64,7 @@ describe("command-startup-policy", () => {
       ["gateway", "diagnostics", "export"],
       ["gateway", "stability"],
       ["gateway", "usage-cost"],
+      ["gateway", "call"],
     ]) {
       expect(resolvePolicy({ commandPath }).skipConfigGuard, commandPath.join(" ")).toBe(true);
     }
@@ -96,7 +97,6 @@ describe("command-startup-policy", () => {
       ["nodes", "remove"],
       ["devices", "approve"],
       ["devices", "remove"],
-      ["gateway", "call"],
       ["gateway", "suspend"],
       ["gateway", "resume"],
     ]) {

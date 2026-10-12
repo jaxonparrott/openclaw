@@ -11,6 +11,7 @@ import {
   DEFAULT_WORKER_PENDING_TASKS,
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
+import { WorkerTaskError, workerTaskTimeoutError } from "./worker-task-error.js";
 import type { WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import {
@@ -20,6 +21,7 @@ import {
 } from "./worker-task-pool-completion.js";
 import {
   closeOwnedWorkerTask,
+  createWorkerHostExchange,
   dispatchOwnedWorkerRequest,
   joinOwnedWorkerTask,
   prepareWorkerTaskInput,
@@ -48,16 +50,6 @@ import type {
 const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
 
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
-export class WorkerTaskError extends Error {
-  constructor(
-    message: string,
-    readonly code: "unavailable" | "timeout" | "failed" | "overloaded",
-  ) {
-    super(message);
-    this.name = "WorkerTaskError";
-  }
-}
-
 /** Bounded execution workers; each worker accepts one task at a time. */
 export class WorkerTaskPoolCore<Input, Output> {
   private readonly slots = new Set<Slot<Input, Output>>();
@@ -110,9 +102,7 @@ export class WorkerTaskPoolCore<Input, Output> {
   private nextTaskId = 0;
   private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
   private readonly expireTasks = () =>
-    expireWorkerTasks(this.queue, this.slots, (task) =>
-      this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-    );
+    expireWorkerTasks(this.queue, this.slots, (task) => this.timeout(task));
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
@@ -473,7 +463,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (
       task &&
       isRecord(message) &&
-      (message.status === "request" || message.status === "consumed")
+      (message.status === "request" ||
+        message.status === "consumed" ||
+        message.status === "notification")
     ) {
       try {
         this.receiveExchange(slot, task, message);
@@ -494,13 +486,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     // SAFETY: The private worker entry owns Output; the transport discriminant is checked above.
     const reply = message as WorkerReply<Output>;
+    const retainInput = Boolean(
+      task.exchange || (task.options.onInputConsumed && !task.inputConsumed),
+    );
     if (reply.status === "failed") {
-      this.finish(
-        task,
-        new WorkerTaskError(reply.error, "failed"),
-        undefined,
-        Boolean(task.exchange) || (Boolean(task.options.onInputConsumed) && !task.inputConsumed),
-      );
+      this.finish(task, new WorkerTaskError(reply.error, "failed"), undefined, retainInput);
       return;
     }
     try {
@@ -511,22 +501,15 @@ export class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     // A result cannot release inputs whose consumption receipt never arrived.
-    this.finish(
-      task,
-      undefined,
-      reply.value,
-      Boolean(task.exchange) || Boolean(task.options.onInputConsumed && !task.inputConsumed),
-    );
+    this.finish(task, undefined, reply.value, retainInput);
   }
 
   private armTimeout(task: Task<Input, Output>, timeoutMs: number): void {
     clearTimeout(task.timer);
-    const timeout = resolveTimerTimeoutMs(timeoutMs, 60_000);
-    task.deadline = performance.now() + timeout;
-    task.timer = setTimeout(
-      () => this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-      timeout,
-    );
+    const deadline = performance.now() + resolveTimerTimeoutMs(timeoutMs, 60_000);
+    task.deadline = Math.min(task.deadline ?? deadline, deadline);
+    const timeout = Math.max(0, task.deadline - performance.now());
+    task.timer = setTimeout(() => this.timeout(task), timeout);
   }
 
   private receiveExchange(
@@ -536,6 +519,10 @@ export class WorkerTaskPoolCore<Input, Output> {
   ): void {
     if (message.taskId !== task.id) {
       this.fail(slot, new WorkerTaskError("stale worker exchange", "unavailable"));
+      return;
+    }
+    if (message.status === "notification") {
+      task.options.onNotification?.(message.value);
       return;
     }
     if (message.status === "consumed") {
@@ -562,20 +549,19 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.fail(slot, new WorkerTaskError("invalid worker exchange", "unavailable"));
       return;
     }
-    // The owner, not a second pool clock, budgets host waits and pauses approvals.
-    clearTimeout(task.timer);
-    task.deadline = undefined;
-    const exchange: Task<Input, Output>["exchange"] = {
-      id: ++task.exchangeSequence,
-      pressure: new AbortController(),
-      sent: false,
-      onConsumed: undefined,
-    };
-    task.exchange = exchange;
+    if (task.options.hostTimeout === "owner") {
+      // Approval-aware owners pause their own budget while waiting for a decision.
+      clearTimeout(task.timer);
+      task.deadline = undefined;
+    }
+    const exchange = createWorkerHostExchange(task, message.value);
     task.hostWaitStartedAt = performance.now();
     this.dispatch();
     this.computeCapacity?.requestCheckpoints();
     const accept = (response: WorkerTaskResponse) => {
+      if (!task.done && task.deadline !== undefined && performance.now() >= task.deadline) {
+        this.timeout(task);
+      }
       if (task.done || slot.task !== task || slot.retiring) {
         // A slow host handler may settle after cancellation. Never feed a successor.
         const release = () => {
@@ -620,6 +606,13 @@ export class WorkerTaskPoolCore<Input, Output> {
       closedError: () =>
         new WorkerTaskError("worker task closed before host dispatch", "unavailable"),
     });
+  }
+
+  private timeout(task: Task<Input, Output>): void {
+    if (task.done) {
+      return;
+    }
+    this.cancel(task, workerTaskTimeoutError(task.exchange, this.options.workerUrl));
   }
 
   private cancel(task: Task<Input, Output>, error: Error): void {
@@ -681,7 +674,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     this.finishHostWait(task);
     task.done = true;
-    task.runInContext(() => task.controller.abort());
+    task.runInContext(() => task.controller.abort(error));
     clearTimeout(task.timer);
     task.deadline = undefined;
     task.options.signal?.removeEventListener("abort", task.abort);

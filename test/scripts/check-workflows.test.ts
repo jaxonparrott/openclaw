@@ -71,14 +71,14 @@ describe("check-workflows", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("missing workflow linter");
     expect(result.stderr).toContain("install actionlint built from");
-    expect(result.stderr).toContain("011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7");
+    expect(result.stderr).toContain("644076a59742c2d1540ebd4686eab3c308f0e562");
   });
 
   it.each([
     { version: undefined, tool: "go" },
     { version: "1.7.12", tool: "go" },
     { version: "unknown", tool: "pre-commit" },
-    { version: "v1.7.13-0.20260419144658-011a6d15e749", tool: "installed" },
+    { version: "v1.7.13-0.20260520150004-644076a59742", tool: "installed" },
     { version: "1.7.12", tool: "pre-commit", acquireStatus: 1 },
     { version: "1.7.12", tool: "go", lintStatus: 7 },
     { version: "1.7.12", tool: "unavailable", lintStatus: 1 },
@@ -122,7 +122,7 @@ describe("check-workflows", () => {
             "#!/bin/sh",
             'if [ "$1" = "version" ]; then exit 0; fi',
             'if [ "$1" = "install" ]; then',
-            '  printf "%s\\n" "$*" > "$GO_FALLBACK_MARKER"',
+            '  printf "%s\\n" "$*" "$PWD" > "$GO_FALLBACK_MARKER"',
             '  printf "%s\\n" "$GOBIN" > "$GO_BIN_MARKER"',
             `  if [ ${acquireStatus} != 0 ]; then exit ${acquireStatus}; fi`,
             '  /bin/cp "$PINNED_ACTIONLINT" "$GOBIN/actionlint"',
@@ -171,8 +171,9 @@ describe("check-workflows", () => {
       expect(existsSync(markerPath)).toBe(acquired);
       if (acquired) {
         expect(readFileSync(markerPath, "utf8")).toContain(
-          "install github.com/rhysd/actionlint/cmd/actionlint@011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+          "install -mod=readonly github.com/rhysd/actionlint/cmd/actionlint",
         );
+        expect(readFileSync(markerPath, "utf8")).toContain(path.resolve("tools/actionlint"));
         expect(existsSync(readFileSync(binMarkerPath, "utf8").trim())).toBe(false);
       } else if (tool === "installed") {
         expect(readFileSync(actionlintMarkerPath, "utf8")).toContain(".github/workflows/ci.yml");
@@ -185,7 +186,7 @@ describe("check-workflows", () => {
         expect(existsSync(preCommitMarkerPath)).toBe(false);
         if (tool === "unavailable") {
           expect(result.stderr).toContain(
-            "missing workflow linter: install actionlint built from 011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7",
+            "missing workflow linter: install actionlint built from 644076a59742c2d1540ebd4686eab3c308f0e562",
           );
           expect(result.stderr).toContain("Go to acquire that revision, or a pre-commit runtime");
         }

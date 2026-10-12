@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSqliteWorkerLifecycle } from "./sqlite-worker-broker-lifecycle.js";
 import type { Actor } from "./sqlite-worker-broker.types.js";
@@ -143,4 +144,54 @@ describe("SQLite worker slots", () => {
       expect(actors.size).toBe(0);
     },
   );
+});
+
+it("cancels a slot waiter without releasing a retiring worker's capacity", async ({ signal }) => {
+  const worker = Object.assign(new EventEmitter(), { unref: vi.fn() });
+  createCpuTrackedWorker.mockImplementation(() => worker);
+  const slots = new Set<ReturnType<ReturnType<typeof createSqliteWorkerLifecycle>["createSlot"]>>();
+  const lifecycle = createSqliteWorkerLifecycle({
+    explicitSqliteCloseReleasesNativeResources: true,
+    actors: new Map(),
+    slots,
+    stores: new Map(),
+    enqueueClose: vi.fn(),
+    fail: vi.fn(),
+  });
+  const options = {
+    carrierUrl: new URL("file:///openclaw/src/infra/sqlite-store.worker.ts"),
+    moduleUrl: new URL("file:///openclaw/src/infra/device-auth-store.sqlite.ts"),
+    databasePath: "/state/openclaw.sqlite",
+    input: Buffer.alloc(0),
+    existingOnly: false,
+  };
+  const replyOwner = () => ({ fail: vi.fn(), finish: vi.fn(), dispatch: vi.fn() });
+  const retiring = lifecycle.createSlot(options, false, replyOwner);
+  retiring.retiring = retiring.exit;
+  const canceled = new AbortController();
+  const reason = new Error("worker callback deadline expired");
+  const pending = lifecycle.acquireSlot(
+    { ...options, signal: canceled.signal },
+    { maxWorkers: 1, maxStores: 1 },
+    replyOwner,
+  );
+  const rejected = expect(pending).rejects.toBe(reason);
+  canceled.abort(reason);
+  try {
+    await withinTest(rejected, signal);
+    expect(slots.has(retiring)).toBe(true);
+    expect(createCpuTrackedWorker).toHaveBeenCalledOnce();
+    worker.emit("exit", 0);
+    const successor = await lifecycle.acquireSlot(
+      options,
+      { maxWorkers: 1, maxStores: 1 },
+      replyOwner,
+    );
+    expect(slots.has(retiring)).toBe(false);
+    expect(slots.has(successor)).toBe(true);
+    expect(createCpuTrackedWorker).toHaveBeenCalledTimes(2);
+  } finally {
+    worker.emit("exit", 0);
+    await Promise.allSettled([pending]);
+  }
 });

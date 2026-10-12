@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferredCore } from "../shared/deferred.js";
+import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { ensureSqliteLibrarySelected } from "./bun-sqlite-library.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
@@ -48,7 +49,9 @@ export function createSqliteWorkerLifecycle({
     limits: { maxWorkers: number; maxStores: number },
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
   ): Promise<Slot> {
+    options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
     const shareWorkers = explicitSqliteCloseReleasesNativeResources;
     const hasEphemeral = Boolean(options.target) || [...slots].some((slot) => slot.ephemeral);
     const available = [...slots].filter(
@@ -74,7 +77,11 @@ export function createSqliteWorkerLifecycle({
       if (options.target || !available.length || !shareWorkers) {
         const retiring = [...slots].filter((slot) => Boolean(slot.failed || slot.retiring));
         if (retiring.length > 0) {
-          await Promise.race(retiring.map(({ exit }) => exit));
+          await racePromiseWithAbortSignal(
+            Promise.race(retiring.map(({ exit }) => exit)),
+            options.signal,
+            (signal) => signal.reason,
+          );
           return acquireSlot(options, limits, createReplyOwner);
         }
         throw new SqliteWorkerError(
@@ -97,7 +104,9 @@ export function createSqliteWorkerLifecycle({
     createReplyOwner: (slot: Slot) => SqliteWorkerReplyOwner,
   ): Slot {
     ensureSqliteLibrarySelected();
+    options.signal?.throwIfAborted();
     options.assertCurrent?.();
+    options.signal?.throwIfAborted();
     const worker = runOutsideCaller(() =>
       createCpuTrackedWorker(options.carrierUrl, {
         resourceLimits: { maxOldGenerationSizeMb: 512 },

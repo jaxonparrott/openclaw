@@ -59,6 +59,14 @@ export function createPackageSwapResults(
   return {
     warnings,
     step,
+    activationWarning: (message: string | undefined) => {
+      if (message === undefined) {
+        return;
+      }
+      if (!warnings.includes(message)) {
+        warnings.push(message);
+      }
+    },
     rollbackError(error: unknown): string {
       if (error instanceof PackageIntegrityMismatchError && error.differences.length > 0) {
         integrityFailures.splice(

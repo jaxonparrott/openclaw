@@ -131,6 +131,31 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   ).toBe(canonicalSessionId);
 });
 
+test("concurrent sessions.create requests share a fresh non-main agent database", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionStorePath = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
+  testState.agentsConfig = { ownership: "explicit", entries: { main: {}, work: {} } };
+  (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
+  const keys = Array.from({ length: 4 }, (_, index) => `agent:work:dashboard:first-${index}`);
+  const created = await Promise.all(
+    keys.map((key) =>
+      directSessionReq<{ key: string; sessionId: string }>("sessions.create", {
+        agentId: "work",
+        key,
+      }),
+    ),
+  );
+  expect(created.map((result) => ({ ok: result.ok, error: result.error }))).toEqual(
+    keys.map(() => ({ ok: true, error: undefined })),
+  );
+  const storePath = testState.sessionStorePath.replace("{agentId}", "work");
+  for (const [index, key] of keys.entries()) {
+    expect(loadSessionEntry({ agentId: "work", sessionKey: key, storePath })?.sessionId).toBe(
+      created[index]?.payload?.sessionId,
+    );
+  }
+});
+
 test("createGatewaySession forwards its commit guard into main-session reset", async () => {
   const { storePath } = await createSessionStoreDir();
   try {

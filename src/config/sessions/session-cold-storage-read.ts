@@ -50,14 +50,17 @@ export async function readRestoredSessionTranscript<T>(
     readOnly?: boolean;
     assertCurrent?: () => void;
     coldRead?: SessionColdReadPreparation;
+    signal?: AbortSignal;
   },
 ): Promise<T> {
+  options?.signal?.throwIfAborted();
   options?.assertCurrent?.();
   // Read workers report cold storage to their host; only the host restores it.
   if (options?.readOnly) {
     return read();
   }
   for (let restorations = 0; ; restorations++) {
+    options?.signal?.throwIfAborted();
     options?.assertCurrent?.();
     try {
       return await read();
@@ -72,7 +75,13 @@ export async function readRestoredSessionTranscript<T>(
       // The atomic reader already checks cold storage. Keep one more restoration
       // attempt if a peer archives again before the next read.
       const { restoreSessionColdTranscript } = await import("./session-cold-storage.js");
-      await restoreSessionColdTranscript(scope, options?.assertCurrent, options?.coldRead);
+      await restoreSessionColdTranscript(
+        scope,
+        options?.assertCurrent,
+        options?.coldRead,
+        undefined,
+        options?.signal,
+      );
     }
   }
 }

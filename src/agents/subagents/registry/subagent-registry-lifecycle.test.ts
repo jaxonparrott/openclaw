@@ -559,7 +559,12 @@ describe("subagent registry lifecycle hardening", () => {
           change === "reply"
             ? { ...terminalReply, text: "corrected result" }
             : { ...terminalReply },
-        endedAt: change === "older equivalent" ? 3_999 : change === "timing" ? 4_001 : 4_000,
+        endedAt:
+          change === "older equivalent"
+            ? 3_999
+            : change === "timing" || change === "reply"
+              ? 4_001
+              : 4_000,
         ...(change === "error"
           ? {
               outcome: { status: "error", error: "provider failed" },
@@ -568,6 +573,61 @@ describe("subagent registry lifecycle hardening", () => {
           : {}),
       });
       expect(prepared.isCurrent()).toBe(current);
+    },
+  );
+
+  describe.each([
+    {
+      name: "visible answer",
+      first: { disposition: "visible" as const, text: "first final" },
+      resultText: "first final",
+    },
+    {
+      name: "intentional silence",
+      first: { disposition: "silent" as const },
+      resultText: "NO_REPLY",
+    },
+    {
+      name: "empty reply",
+      first: { disposition: "empty" as const },
+      resultText: null,
+    },
+  ])("completion receipt ordering after $name", ({ first, resultText }) => {
+    it.each([
+      { order: "older", endedAt: 3_999, accepted: false },
+      { order: "equal-time", endedAt: 4_000, accepted: false },
+      { order: "newer", endedAt: 4_001, accepted: true },
+    ])("accepts only a newer correction ($order receipt)", async ({ endedAt, accepted }) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      const correction = { disposition: "visible", text: "corrected final" } as const;
+      await completeRun(controller, entry, { terminalReply: first, endedAt: 4_000 });
+      await completeRun(controller, entry, { terminalReply: correction, endedAt });
+
+      const stored = readLifecycleRun(entry);
+      expect(stored.execution.endedAt).toBe(accepted ? 4_001 : 4_000);
+      expect(stored.completion).toMatchObject({
+        terminalReply: accepted ? correction : first,
+        resultText: accepted ? "corrected final" : resultText,
+      });
+    });
+  });
+
+  it.each([3_999, 4_000])(
+    "accepts the first producer reply after terminal timing (%s)",
+    async (endedAt) => {
+      const entry = createRunEntry({ expectsCompletionMessage: true });
+      const controller = createLifecycleController({ entry });
+      const outcome = { status: "error", error: "provider failed" } as const;
+      const reason = SUBAGENT_ENDED_REASON_ERROR;
+      await completeRun(controller, entry, { outcome, reason, terminalReply: undefined });
+      const terminalReply = { disposition: "visible", text: "first producer reply" } as const;
+      await completeRun(controller, entry, { outcome, reason, endedAt, terminalReply });
+
+      expect(readLifecycleRun(entry).completion).toMatchObject({
+        terminalReply,
+        resultText: "first producer reply",
+      });
     },
   );
 
@@ -3771,6 +3831,48 @@ describe("subagent registry lifecycle hardening", () => {
       }
     },
   );
+
+  it("retires delivery expiry when requester execution starts and records its eventual success", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(2_000_000);
+    const entry = createRunEntry({
+      endedAt: Date.now() - 30 * 60_000 + 1_000,
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: "final answer" },
+      delivery: { status: "pending" },
+      outcome: { status: "ok" },
+      retainAttachmentsOnKeep: true,
+    });
+    const requesterFinished = createDeferredCore<AnnounceFlowOutcome>();
+    let deliverySignal: AbortSignal | undefined;
+    const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+      (params) => {
+        deliverySignal = params.signal;
+        params.onExecutionStarted?.();
+        return requesterFinished.promise;
+      },
+    );
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+    try {
+      expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+      await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+      await vi.advanceTimersByTimeAsync(1_001);
+      expect(deliverySignal?.aborted).toBe(false);
+      expect(readLifecycleRun(entry).delivery?.status).toBe("pending");
+      requesterFinished.resolve("delivered");
+      await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+      expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
+      expect(readLifecycleRun(entry).delivery?.nextAttemptAt).toBeUndefined();
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
+      expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+    } finally {
+      requesterFinished.resolve("delivered");
+      await vi.advanceTimersByTimeAsync(0);
+      controller.clearScheduledResumeTimers();
+      vi.useRealTimers();
+    }
+  });
 
   it("suspends successful keep-mode final delivery after its deadline", async () => {
     const beforeWrite = vi.fn();

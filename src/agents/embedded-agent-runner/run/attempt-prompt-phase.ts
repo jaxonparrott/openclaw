@@ -396,6 +396,7 @@ export async function runEmbeddedAttemptPromptPhase(
       contextTokenBudget: promptContext.contextTokenBudget,
       hookMessagesForCurrentPrompt: promptContext.hookMessagesForCurrentPrompt,
       promptForPrecheck: promptContext.llmBoundaryPromptForPrecheck,
+      pendingInputTokens: compactionRequestBudget?.pendingTokens,
       reserveTokens,
       sessionMessageCount: activeSession.messages.length,
       state,
@@ -421,6 +422,10 @@ export async function runEmbeddedAttemptPromptPhase(
           promptState.finalPromptText = prompt;
         },
         assertHostActive: promptAssembly.assertHostActive,
+        // The anchored rewrite takes its own agent-database admission; nesting it in a
+        // session-manager write admission would queue behind itself on this release line.
+        withTranscriptWrite: withOwnedTranscriptWrite,
+        getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
         preparePrimaryModelRequest: () =>
           promptToolPolicy.prepareForDispatch(async () => {
             promptAssembly.decisionPrefilter.restrictionApplied = false;

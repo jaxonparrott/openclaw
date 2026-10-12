@@ -1,7 +1,7 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
-import type { PromptMode } from "../../agents/system-prompt.types.js";
+import type { PromptMode, SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
@@ -28,7 +28,11 @@ import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { MainSessionRecoveryOwnerLease } from "../main-session-recovery/main-session-recovery-store.js";
 import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
-import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
+import type {
+  AgentRunTranscriptContext,
+  AgentStreamParams,
+  ClientToolDefinition,
+} from "./shared-types.js";
 
 export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
@@ -156,6 +160,8 @@ export type AgentCommandOpts = {
   /** Startup awaits returned work; incidental synchronous return values are ignored. */
   onExecutionStarted?: () => unknown;
   extraSystemPrompt?: string;
+  /** Conversation preparation owns silence guidance; required-reply enforcement is separate. */
+  silentReplyPromptMode?: SilentReplyPromptMode;
   /** Bootstrap workspace context injection mode for this run. */
   bootstrapContextMode?: "full" | "lightweight";
   /** Run kind hint for bootstrap context behavior. */
@@ -232,6 +238,8 @@ export type AgentCommandOpts = {
   ) => void | Promise<void>;
   /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
   beforeTerminalDelivery?: () => Promise<void>;
+  /** Gateway-owned preparation of runtime-appended assistant transcript messages. */
+  prepareAssistantTranscriptMessage?: AgentRunTranscriptContext["prepareAssistantTranscriptMessage"];
   /** Called when the actual run model is selected, including fallback retries. */
   onActiveModelSelected?: (ctx: { provider: string; model: string }) => void | Promise<void>;
   /** Called when every candidate in the run's model fallback chain failed. */
@@ -272,6 +280,7 @@ type AgentCommandGatewayOnlyKey =
   | "onAdmittedRunContext"
   | "onPostAdmittedRunContext"
   | "beforeTerminalDelivery"
+  | "prepareAssistantTranscriptMessage"
   | "internalDeliverySuppressErrors";
 
 /** Restricted option surface for external ingress callsites. */

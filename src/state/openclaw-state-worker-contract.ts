@@ -248,6 +248,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
 export type OpenClawStateWorkerOperationOptions = {
   preparation?: OpenClawStateWorkerOpenPreparation;
   existingOnly?: boolean;
+  signal?: AbortSignal;
   assertCurrent?: (commandType?: PropertyKey) => void;
   createAdmission?: SqliteWorkerAdmissionFactory;
 };

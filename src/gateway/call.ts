@@ -33,7 +33,7 @@ import type { DeviceAuthEntry } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { VERSION } from "../version.js";
-import { resolveGatewayAuth } from "./auth-resolve.js";
+import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import {
   GatewayCredentialsRequiredError,
   GatewayLocalBackendSharedAuthUnavailableError,
@@ -416,8 +416,8 @@ export function buildGatewayConnectionDetails(
 }
 
 function resolveGatewayCallAuth(config: OpenClawConfig) {
-  return resolveGatewayAuth({
-    authConfig: config.gateway?.auth,
+  return resolveGatewayAuthForConfig({
+    config,
     env: process.env,
     tailscaleMode: config.gateway?.tailscale?.mode,
   });

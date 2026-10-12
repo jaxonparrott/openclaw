@@ -59,57 +59,79 @@ export function createIncognitoUsageCostAdapter(
       },
       writeRollup(
         request: IncognitoComputeOperations["session.compute.usage.writeRollup"]["input"]["request"],
+        signal?: AbortSignal,
       ) {
-        return compute.execute({
-          type: "session.compute.usage.writeRollup",
-          input: { ...target, request },
-        });
+        return compute.execute(
+          {
+            type: "session.compute.usage.writeRollup",
+            input: { ...target, request },
+          },
+          signal,
+        );
       },
-      pruneRows(request: readonly SessionCostUsageRollupSnapshot[]) {
-        return compute.execute({
-          type: "session.compute.usage.prune",
-          input: { ...target, request },
-        });
+      pruneRows(request: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
+        return compute.execute(
+          {
+            type: "session.compute.usage.prune",
+            input: { ...target, request },
+          },
+          signal,
+        );
       },
     },
-    async read(request: UsageCostWorkerHostRequest) {
+    async read(request: UsageCostWorkerHostRequest, signal?: AbortSignal) {
       switch (request.kind) {
         case "memory-stats":
           return Promise.all(
             request.input.map((input) => {
               assertMarker(input);
-              return compute.execute({
-                type: "session.compute.usage.stats",
-                input: { ...target, request: {} },
-              });
+              return compute.execute(
+                {
+                  type: "session.compute.usage.stats",
+                  input: { ...target, request: {} },
+                },
+                signal,
+              );
             }),
           );
         case "memory-cache":
-          return compute.execute({
-            type: "session.compute.usage.cache",
-            input: { ...target, request: { filePaths: request.input.filePaths ?? [filePath] } },
-          });
+          return compute.execute(
+            {
+              type: "session.compute.usage.cache",
+              input: { ...target, request: { filePaths: request.input.filePaths ?? [filePath] } },
+            },
+            signal,
+          );
         case "memory-cache-body":
-          return compute.execute({
-            type: "session.compute.usage.cacheBody",
-            input: { ...target, request: request.input },
-          });
+          return compute.execute(
+            {
+              type: "session.compute.usage.cacheBody",
+              input: { ...target, request: request.input },
+            },
+            signal,
+          );
         case "memory-transcript": {
           assertMarker(request.input.marker);
           const key = JSON.stringify(request.input);
           let sourceId = sources.get(key);
           if (!sourceId) {
             sourceId = randomUUID();
-            await compute.execute({
-              type: "session.compute.source.open",
-              input: { ...target, sourceId, range: request.input },
-            });
+            await compute.execute(
+              {
+                type: "session.compute.source.open",
+                input: { ...target, sourceId, range: request.input },
+              },
+              signal,
+            );
             sources.set(key, sourceId);
           }
-          return compute.execute({
-            type: "session.compute.source.read",
-            input: { ...target, sourceId },
-          });
+          return compute.execute(
+            {
+              type: "session.compute.source.read",
+              input: { ...target, sourceId },
+            },
+            signal,
+          );
         }
         default:
           throw new Error("Invalid incognito usage read request");

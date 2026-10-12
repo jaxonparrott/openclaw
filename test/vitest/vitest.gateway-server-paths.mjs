@@ -11,6 +11,7 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
+  "src/gateway/agent-turn/agent-run-commentary-media.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",
   "src/gateway/board-http.test.ts",
@@ -484,6 +485,8 @@ export const gatewayMethodsTestExclude = [
 
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
+  // Real provider and subagent lifecycle registrations must survive the whole scenario.
+  "src/gateway/gateway.prompt-cache.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.

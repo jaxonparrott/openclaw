@@ -77,6 +77,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
       operationLabel: string,
       authority?: CacheWriteAuthority,
       onAdmitted?: () => void,
+      signal?: AbortSignal,
     ): Promise<AgentDatabaseOperations[Key]["output"]> {
       if (!execution) {
         return withOpenClawAgentDatabaseWrite(
@@ -88,6 +89,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
                   throw new Error("Usage cache database changed before write admission");
                 }
                 authority?.(current);
+                signal?.throwIfAborted();
                 database = current;
                 releaseBorrow ??= retainAgentDatabase(current.db);
                 onAdmitted?.();
@@ -97,6 +99,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
               { operationLabel },
             ),
           database?.db,
+          signal,
         );
       }
       const captured = structuredClone(input);
@@ -108,6 +111,7 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
       let opening = false;
       const source: AgentDatabaseRequestExecutionSource = {
         assertCurrent() {
+          signal?.throwIfAborted();
           identity ??= current.fileIdentity;
           authority?.(undefined, current, opening);
         },
@@ -135,21 +139,26 @@ function createCacheWriter(options: ReturnType<typeof captureCacheDatabaseOption
         },
       };
       try {
-        return await runOpenClawAgentWorkerWrite(options, async () => {
-          if (!prepared && !cleanup) {
-            await current.prepare(source);
-            opening = false;
-            prepared = true;
-          }
-          source.assertCurrent();
-          const result = await current.runExisting(source, async (worker) => ({
-            value: await worker.execute({ type, input: captured }),
-          }));
-          if (!result) {
-            throw new Error("Usage cache database disappeared before write");
-          }
-          return result.value;
-        });
+        return await runOpenClawAgentWorkerWrite(
+          options,
+          async () => {
+            if (!prepared && !cleanup) {
+              await current.prepare(source, signal);
+              opening = false;
+              prepared = true;
+            }
+            source.assertCurrent();
+            const result = await current.runExisting(source, async (worker) => ({
+              value: await worker.execute({ type, input: captured }, { signal }),
+            }));
+            if (!result) {
+              throw new Error("Usage cache database disappeared before write");
+            }
+            return result.value;
+          },
+          undefined,
+          signal,
+        );
       } finally {
         if (cleanup) {
           await current.release();
@@ -335,7 +344,10 @@ export function prepareSessionCostUsageRefreshLock(
       return acquiring;
     },
     release,
-    writeRollup(params: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1]) {
+    writeRollup(
+      params: Parameters<typeof writeSessionCostUsageRollupInDatabase>[1],
+      signal?: AbortSignal,
+    ) {
       assertCurrent();
       return writer.write(
         "usageCache.writeRollup",
@@ -343,9 +355,11 @@ export function prepareSessionCostUsageRefreshLock(
         (current) => writeSessionCostUsageRollupInDatabase(current.db, params),
         "session-cost-usage.rollup.write",
         assertCurrent,
+        undefined,
+        signal,
       );
     },
-    pruneRows(rows: readonly SessionCostUsageRollupSnapshot[]) {
+    pruneRows(rows: readonly SessionCostUsageRollupSnapshot[], signal?: AbortSignal) {
       assertCurrent();
       return writer.write(
         "usageCache.prune",
@@ -353,6 +367,8 @@ export function prepareSessionCostUsageRefreshLock(
         (current) => pruneSessionCostUsageRollupsInDatabase(current.db, rows),
         "session-cost-usage.rollup.prune",
         assertCurrent,
+        undefined,
+        signal,
       );
     },
   };

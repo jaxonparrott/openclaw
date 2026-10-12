@@ -1119,7 +1119,7 @@ describe("memory index", () => {
     } finally {
       await diagnostic.close();
     }
-    expect((await getMemorySearchManager({ cfg, agentId: "main" })).manager).toBe(serving);
+    expect(await getPersistentManager(cfg)).toBe(serving);
     expect(serving.status().sourceCounts?.[0]?.chunkBytes).toBeUndefined();
     expect(serving.status().storage).toBeUndefined();
   });

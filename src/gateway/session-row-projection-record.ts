@@ -3,7 +3,7 @@ import { resolveSessionParentSessionKey } from "../channels/plugins/session-conv
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { GatewayStoredSessionTargets } from "../config/sessions/combined-store-model-sources.js";
 import type { SessionEntryPublicationSource } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
+import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import type {
   InternalSessionEntry as SessionEntry,

@@ -112,7 +112,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   direct user turn, cancellation, session reset or archive, and Gateway restart.
   After the successor binds its run scope, that scope owns the entitlement until
   it closes. Retiring the delivered child batch cannot revoke a still-running
-  requester.
+  requester. A new direct user turn retires the automation entitlement, not the
+  child batch’s separately retained completion source. Valid results can still
+  return under their original caller’s restrictions; they never borrow the new
+  turn’s identity or permissions.
 - **Completion-source custody.** Registration retains the live operator source
   separately from execution. Individual delivery and requester settlement use
   that captured permission ceiling, not the async caller that later schedules
@@ -154,7 +157,8 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   in flight, settlement observes the same request without spending failure
   attempts or discarding the child results. Gateway admission and execution
   retain their own timeouts; explicit cancellation still stops the turn.
-  Individual private announcements keep their existing delivery deadline.
+  Individual private announcements keep their delivery deadline until requester
+  execution starts; the Gateway's requester runtime budget then applies.
   Findings are capped at 4,096 characters, individual
   results at 512, and route notices at 1,024. Ambiguous replay reuses its attempt
   key; it does not assert global exactly-once delivery across Gateway restarts.

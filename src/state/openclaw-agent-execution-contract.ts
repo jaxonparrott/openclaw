@@ -67,6 +67,21 @@ export type OpenClawAgentDatabaseExecution = {
   release(): Promise<void>;
 };
 
+export type AgentDatabaseFileExecutionOwner = {
+  readonly kind: "file";
+  readonly agentId: string;
+  readonly sharedDatabaseKey: string;
+  readonly creationIdentity?: DatabasePathIdentity;
+  borrow(
+    pathname: string,
+    expectedIdentity?: AgentDatabaseExecutionFileIdentity,
+    expectedCreationIdentity?: DatabasePathIdentity,
+    requestedPath?: string,
+  ): OpenClawAgentDatabaseExecution;
+  closeIdle(): Promise<void>;
+  close(): Promise<void>;
+};
+
 export type AgentDatabaseFileExecutionOpen = {
   kind?: "file";
   leaseId: string;

@@ -720,14 +720,14 @@ higher threshold, and a second reopen keeps it open for that visit and task.
 See [Task progress cards](/tools/progress-card#where-the-card-appears) for gesture thresholds,
 manual-choice scope, and reset behavior.
 
-Streaming output and layout adjustments keep reading mode intact. A message from
-another participant pauses following and preserves your current position, even
-when you were at the end. Typing indicators do not move the transcript. Sending
-a message from this pane resumes following your response; a send from another
-browser, including one signed in as you, does not count as a local send. Scroll
-back to the end or select **Latest** to resume following explicitly. Assistant
-text stays visible as it streams and becomes saved history, without a reply
-entry fade or slide. Submitted prompts slide upward once without fading out;
+Streaming output and layout adjustments keep reading mode intact. While you are
+at or near the end, new messages and replies keep the transcript pinned to the
+latest content, including turns started from another browser, device, channel,
+or automation. Typing previews preserve this follow state. Scrolling up pauses
+following and preserves your reading position as incoming content grows.
+Scroll back to the end, select **Latest**, or send a message from this pane to
+resume following. Assistant text stays visible as it streams and becomes saved
+history, without a reply entry fade or slide. Submitted prompts slide upward once without fading out;
 the smooth send scroll starts after the composer and new rows have settled their
 layout. Reduced motion disables the prompt slide and smooth scrolling.
 
@@ -801,7 +801,7 @@ and return focus to the tile you opened.
 Inline audio players support five-second seeking with the arrow keys, including
 when the seek slider has focus. The slider announces the current time and duration.
 
-Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
+Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Progress attachments are preserved for runs started by any Gateway owner, including chat sends, restart recovery, and internal dispatch. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
 
 Computer screenshots retained in the session transcript also load as image previews,
 including after a reload. Opening a preview shows the saved screenshot in the image

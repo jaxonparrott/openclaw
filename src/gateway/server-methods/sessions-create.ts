@@ -57,6 +57,7 @@ import {
   resolveSessionCreateRootParameters,
 } from "./session-create-root.js";
 import { resolveSessionCreateSpawnContext } from "./session-create-spawn.js";
+import { createSessionModelCatalogWait } from "./session-model-catalog-wait.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
   readGatewayRequestMutationAuthority,
@@ -472,6 +473,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
     if (!authority.ensureActive()) {
       return;
     }
+    const catalogWait = createSessionModelCatalogWait([signal, client?.connectionSignal]);
     const createParams: Parameters<typeof createGatewaySession>[0] = {
       cfg,
       getCurrentConfig,
@@ -533,8 +535,13 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       creation: sessionCreation,
       authorizedPluginId: normalizeOptionalString(client?.internal?.pluginRuntimeOwnerId),
       armSessionDiffBaselineCapture: !repository,
-      loadGatewayModelCatalogSnapshot: () =>
-        context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+      loadGatewayModelCatalogSnapshot: async () => {
+        const captured = await operatorCapture.preparation;
+        return catalogWait.run(
+          () => context.loadGatewayModelCatalogSnapshot({ agentId: sessionAgentId }),
+          captured?.authority.signal,
+        );
+      },
       commitGuard,
       afterSessionCommitted: (entry, source) =>
         registerCommittedSessionCategory(
@@ -591,6 +598,10 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       },
     };
     const created = await createGatewaySession(createParams).catch((error: unknown) => {
+      if (error === catalogWait.unavailable) {
+        respond(false, undefined, catalogWait.unavailable.error);
+        return undefined;
+      }
       if (error instanceof ModelAccountConnectAuthorityError) {
         respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
         return undefined;

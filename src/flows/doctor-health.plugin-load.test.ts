@@ -1,6 +1,8 @@
 import "./doctor-health.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
+import * as fsSafeAdvanced from "@openclaw/fs-safe/advanced";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { afterEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
@@ -8,6 +10,10 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const { mocks } = await import("./doctor-health.test-support.js");
+
+vi.mock("@openclaw/fs-safe/advanced", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@openclaw/fs-safe/advanced")>()),
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -61,21 +67,23 @@ it.each([
         const failCaptureWrite = (target: fs.PathLike) => {
           if (path.basename(String(target)) === "index.cjs" && String(target) !== source) {
             failedWrite = true;
-            throw Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" });
+            throw new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
+              cause: Object.assign(new Error("fixture capture write failed"), { code: "ENOSPC" }),
+            });
           }
         };
-        const copy = fs.copyFileSync;
-        vi.spyOn(fs, "copyFileSync").mockImplementation((from, target, ...args) => {
-          failCaptureWrite(target);
-          return copy(from, target, ...args);
-        });
-        // Platforms without descriptor paths create the bounded-copy destination directly.
-        const open = fs.openSync;
-        vi.spyOn(fs, "openSync").mockImplementation((target, flags, ...args) => {
-          if (flags === "w") {
-            failCaptureWrite(target);
+        const copy = fsSafeAdvanced.copyRootFileSync;
+        vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+          if (options.source.absolutePath === source) {
+            failCaptureWrite(options.destination.absolutePath);
           }
-          return open(target, flags, ...args);
+          return copy(options);
+        });
+        // Small regular files use the same admitted destination owner without a clone.
+        const create = fsSafeAdvanced.createFileSync;
+        vi.spyOn(fsSafeAdvanced, "createFileSync").mockImplementation((target, options) => {
+          failCaptureWrite(target);
+          return create(target, options);
         });
       }
       mocks.runContributions.mockImplementation(async () => {
@@ -89,6 +97,11 @@ it.each([
                 failure === "ENOSPC" ? "fixture capture write failed" : "fixture syntax failed",
               ),
             });
+            if (failure === "ENOSPC") {
+              expect(registry.plugins.find((plugin) => plugin.id === id)?.error).toContain(
+                "free space on the filesystem used by the plugin load and rerun Doctor",
+              );
+            }
           } finally {
             await disposePluginRegistryInstances(registry);
           }

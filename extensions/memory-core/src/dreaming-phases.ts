@@ -86,7 +86,6 @@ type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingCon
   config: TConfig;
   logger: Logger;
   subagent?: DreamNarrativeRequest["subagent"];
-  detachNarratives?: boolean;
   nowMs: number;
   admissionPolicy?: SessionAdmissionPolicy;
 };
@@ -1389,7 +1388,7 @@ export async function runDreamingSweepPhases(params: {
   cfg?: OpenClawConfig;
   logger: Logger;
   subagent?: DreamNarrativeRequest["subagent"];
-  detachNarratives?: boolean;
+  runInBackground?: DreamNarrativeRequest["runInBackground"];
   nowMs?: number;
 }): Promise<DreamingSweepPhaseResult> {
   // All phases in one sweep share the same observation and report timestamp.
@@ -1424,7 +1423,7 @@ export async function runDreamingSweepPhases(params: {
         timezone: config.timezone,
         model: config.execution?.model,
         logger: params.logger,
-        detached: params.detachNarratives,
+        runInBackground: params.runInBackground,
       });
       if (outcome.status === "degraded") {
         degradedPhases += 1;

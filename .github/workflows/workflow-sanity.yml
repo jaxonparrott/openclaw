@@ -220,13 +220,13 @@ jobs:
         run: |
           set -euo pipefail
           # v1.7.12 writes ShellCheck stdin before starting it and deadlocks on large run blocks.
-          # Pin the upstream fix until a release includes rhysd/actionlint#651.
-          ACTIONLINT_REVISION="011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7"
+          # The exact queue-capable fork includes upstream rhysd/actionlint#651.
+          ACTIONLINT_REVISION="644076a59742c2d1540ebd4686eab3c308f0e562"
           export GOBIN="$RUNNER_TEMP/actionlint-bin"
-          go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}"
+          (cd tools/actionlint && go install -mod=readonly github.com/rhysd/actionlint/cmd/actionlint)
           version="$("$GOBIN/actionlint" -version)"
           printf '%s\n' "$version"
-          grep -Fxq "v1.7.13-0.20260419144658-${ACTIONLINT_REVISION:0:12}" <<< "$version"
+          grep -Fxq "v1.7.13-0.20260520150004-${ACTIONLINT_REVISION:0:12}" <<< "$version"
           echo "$GOBIN" >> "$GITHUB_PATH"
 
       - name: Lint workflows

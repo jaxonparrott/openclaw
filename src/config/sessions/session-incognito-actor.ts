@@ -377,13 +377,15 @@ export function createIncognitoSessionFacts(
               },
               disclose: () => held.authorize(authority, "commit"),
               operation,
-              execute: (command) =>
+              execute: (command, requestSignal) =>
                 perform(
                   authority,
                   command,
                   isIncognitoComputeWrite(command.type),
                   (result) => result.value,
-                  signal,
+                  signal && requestSignal
+                    ? AbortSignal.any([signal, requestSignal])
+                    : (requestSignal ?? signal),
                 ),
               cleanup: (command) =>
                 perform(

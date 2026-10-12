@@ -140,3 +140,30 @@ export function readPackageActivationRecordStatus(
     installKey: record.descriptor.authority.installKey,
   };
 }
+
+export const selectedPackageRetirementGeneration = (record: PackageActivationRecord) =>
+  record.intent?.kind === "remove" ||
+  record.intent?.kind === "retire" ||
+  record.intent?.kind === "remove-anchor" ||
+  record.intent?.kind === "unlink-helper"
+    ? record.intent.selected
+    : record.phase === "publication-complete"
+      ? "candidate"
+      : "previous";
+
+export function assertPackageActivationActionAllowed(
+  record: PackageActivationRecord,
+  action: "repair" | "retire",
+) {
+  const allowed =
+    action === "repair"
+      ? ["preparing", "prepared", "publishing", "publication-complete"]
+      : ["publication-complete", "rolled-back", "aborted", "retiring", "anchor-retired"];
+  if (!allowed.includes(record.phase)) {
+    const refusal =
+      action === "repair"
+        ? "Forward publication is disarmed"
+        : "Package evidence cannot be retired";
+    throw new Error(`${refusal} (${record.phase}).`);
+  }
+}

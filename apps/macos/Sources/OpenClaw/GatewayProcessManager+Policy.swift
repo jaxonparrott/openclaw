@@ -22,17 +22,19 @@ extension GatewayProcessManager {
             deadline: Instant,
             finalProbeDeadline: Instant,
             responsiveStartupProgressObserved: Bool,
-            freshInstallGraceAuthorized: Bool) -> (deadline: Instant, requiresLaunchdProof: Bool)?
+            freshInstallGraceAuthorized: Bool,
+            reusedLaunchdPID: Bool) -> (deadline: Instant, requiresLaunchdProof: Bool)?
             where Instant.Duration == Duration
         {
             guard case let .migration(window, _) = self,
                   deadline < finalProbeDeadline
             else { return nil }
             // Advance the previous deadline, not the current time, so delayed authorization
-            // cannot restart the budget. Progress or prior grace avoids repeated launchd proof.
+            // cannot restart the budget. A reused PID must be re-proven even after startup
+            // progress; only fresh-install or non-launchd progress can grant standing grace.
             return (
                 min(deadline.advanced(by: .seconds(window)), finalProbeDeadline),
-                !responsiveStartupProgressObserved && !freshInstallGraceAuthorized)
+                reusedLaunchdPID || (!responsiveStartupProgressObserved && !freshInstallGraceAuthorized))
         }
     }
 

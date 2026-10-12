@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/ai",
-  "version": "2026.10.1-beta.2",
+  "version": "2026.10.2",
   "description": "Reusable model provider adapters and streaming runtime from OpenClaw",
   "keywords": [
     "ai",
@@ -100,6 +100,11 @@
       "types": "./dist/internal/retry-after.d.mts",
       "import": "./dist/internal/retry-after.mjs",
       "default": "./dist/internal/retry-after.mjs"
+    },
+    "./internal/env-api-keys": {
+      "types": "./dist/internal/env-api-keys.d.mts",
+      "import": "./dist/internal/env-api-keys.mjs",
+      "default": "./dist/internal/env-api-keys.mjs"
     },
     "./internal/runtime": {
       "types": "./dist/internal/runtime.d.mts",

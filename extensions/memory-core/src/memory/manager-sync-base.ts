@@ -43,6 +43,7 @@ import {
 } from "./manager-retrieval-read.js";
 import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import { memoryTableExists, requiresMemoryVectorRebuild } from "./manager-vector-rebuild-state.js";
+import type { MemoryCoreRuntimeHost } from "./runtime-host.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
 export type MemorySyncProgressState = {
@@ -91,6 +92,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected activeManagerOperations = 0;
   protected managerIdleWaiters = new Set<() => void>();
   protected readonly acquireLocalService?: MemoryCoreAcquireLocalService;
+  protected abstract readonly runInBackgroundContext: NonNullable<
+    MemoryCoreRuntimeHost["runInBackgroundContext"]
+  >;
   protected abstract readonly cfg: OpenClawConfig;
   protected abstract readonly agentId: string;
   protected abstract readonly workspaceDir: string;

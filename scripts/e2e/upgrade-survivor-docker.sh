@@ -161,6 +161,7 @@ if [ "$UPGRADE_TARGET_TRAIN" = extended-stable ]; then
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/backup-rollback-summary.mjs" "$UPGRADE_SCENARIO_STAGE/backup-rollback-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/native-assignment-summary.mjs" "$UPGRADE_SCENARIO_STAGE/native-assignment-summary.mjs"
   cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/plugin-policy-summary.mjs" "$UPGRADE_SCENARIO_STAGE/plugin-policy-summary.mjs"
+  cp "$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs" "$UPGRADE_SCENARIO_STAGE/package-activation-recovery.mjs"
   chmod 0755 "$UPGRADE_SCENARIO_STAGE"
   UPGRADE_SCENARIO_ARGS+=(
     -v "$UPGRADE_SCENARIO_STAGE:/app/scripts/e2e/lib/upgrade-survivor:ro"
@@ -217,7 +218,7 @@ if [ -n "$LIVE_MODEL_ROWS" ]; then
   done <<<"$LIVE_MODEL_ROWS"
 fi
 
-if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ] || [ "$SCENARIO" = "cron-scheduled-authority" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
   echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi

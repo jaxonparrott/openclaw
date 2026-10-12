@@ -8,10 +8,10 @@ import {
 
 export type IncognitoComputeScope = {
   assertCurrent(this: void): void;
-  execute<Key extends keyof IncognitoComputeOperations>(command: {
-    type: Key;
-    input: IncognitoComputeOperations[Key]["input"];
-  }): Promise<IncognitoComputeOperations[Key]["output"]>;
+  execute<Key extends keyof IncognitoComputeOperations>(
+    command: { type: Key; input: IncognitoComputeOperations[Key]["input"] },
+    signal?: AbortSignal,
+  ): Promise<IncognitoComputeOperations[Key]["output"]>;
 };
 
 /** Cleanup owns only resources captured before dispatch; it never grants data access. */
@@ -66,8 +66,9 @@ export async function withIncognitoCompute<T>(params: {
     assertCurrent();
     const result = await params.operation({
       assertCurrent,
-      execute(command) {
+      execute(command, signal) {
         assertCurrent();
+        signal?.throwIfAborted();
         const captured = structuredClone(command);
         const input = captured.input;
         if (
@@ -80,7 +81,7 @@ export async function withIncognitoCompute<T>(params: {
         if (isIncognitoComputeCommand(captured)) {
           ownResources(captured);
         }
-        const work = params.execute(captured).then((value) => {
+        const work = params.execute(captured, signal).then((value) => {
           assertCurrent();
           params.disclose();
           assertCurrent();

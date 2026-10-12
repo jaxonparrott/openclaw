@@ -1996,7 +1996,7 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
-  it("requires every seeded legacy cron specimen before update", () => {
+  it("requires every baseline cron SQLite specimen before update", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-cron-"));
     try {
       const stateDir = join(root, "state");
@@ -2010,17 +2010,24 @@ process.stdout.write(sessionDir + "\\n");
       };
       const run = (command: string) =>
         spawnSync(testNodeExecPath, [ASSERTIONS_PATH, command], { env, encoding: "utf8" });
-      const seeded = run("seed");
+      const seeded = spawnSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], {
+        env: { ...env, OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base" },
+        encoding: "utf8",
+      });
       expect(seeded.status, seeded.stderr).toBe(0);
-      const cronStore = join(stateDir, "cron", "jobs.json");
+      mkdirSync(join(stateDir, "state"), { recursive: true });
+      const db = new DatabaseSync(join(stateDir, "state", "openclaw.sqlite"));
+      db.exec("CREATE TABLE cron_jobs(job_id TEXT PRIMARY KEY, job_json TEXT NOT NULL)");
+      for (let index = 0; index < 5; index++) {
+        db.prepare("INSERT INTO cron_jobs VALUES (?, ?)").run(`cron-${index}`, "{}");
+      }
       const baseline = run("assert-state");
       expect(baseline.status, baseline.stderr).toBe(0);
-      const store = JSON.parse(readFileSync(cronStore, "utf8"));
-      store.jobs.pop();
-      writeJson(cronStore, store);
+      db.prepare("DELETE FROM cron_jobs WHERE job_id = ?").run("cron-4");
+      db.close();
       const missingRow = run("assert-state");
       expect(missingRow.status).not.toBe(0);
-      expect(missingRow.stderr).toContain("legacy cron authority fixture row count changed");
+      expect(missingRow.stderr).toContain("baseline cron authority fixture row count changed");
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
@@ -2059,14 +2066,64 @@ process.stdout.write(sessionDir + "\\n");
         runSessionStateAssertion(
           (migratedStateDir) => {
             writeMigratedSessionState(migratedStateDir);
-            const db = new DatabaseSync(
+            const agentDb = new DatabaseSync(
               join(migratedStateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
             );
             try {
-              db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
-                JSON.stringify({ acp: saved }),
-                "agent:main:slack:channel:cupgrade",
-              );
+              agentDb
+                .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+                .run(
+                  JSON.stringify({ acp: { backend: "stale-inline" } }),
+                  "agent:main:slack:channel:cupgrade",
+                );
+            } finally {
+              agentDb.close();
+            }
+            const stateDbDir = join(migratedStateDir, "state");
+            mkdirSync(stateDbDir, { recursive: true });
+            const db = new DatabaseSync(join(stateDbDir, "openclaw.sqlite"));
+            try {
+              db.exec(`
+                CREATE TABLE acp_sessions (
+                  session_key TEXT NOT NULL PRIMARY KEY,
+                  session_id TEXT,
+                  backend TEXT NOT NULL,
+                  agent TEXT NOT NULL,
+                  runtime_session_name TEXT NOT NULL,
+                  identity_json TEXT,
+                  mode TEXT NOT NULL,
+                  runtime_options_json TEXT,
+                  cwd TEXT,
+                  state TEXT NOT NULL,
+                  last_activity_at INTEGER NOT NULL,
+                  last_error TEXT,
+                  updated_at INTEGER NOT NULL
+                ) STRICT;
+              `);
+              if (saved && typeof saved === "object") {
+                const value = saved as Record<string, unknown>;
+                db.prepare(
+                  `INSERT INTO acp_sessions (
+                    session_key, session_id, backend, agent, runtime_session_name,
+                    identity_json, mode, runtime_options_json, cwd, state,
+                    last_activity_at, last_error, updated_at
+                  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                ).run(
+                  "fixture-acp-row",
+                  "upgrade-group-session",
+                  String(value.backend),
+                  String(value.agent),
+                  String(value.runtimeSessionName),
+                  JSON.stringify(value.identity ?? null),
+                  String(value.mode),
+                  JSON.stringify(value.runtimeOptions ?? null),
+                  typeof value.cwd === "string" ? value.cwd : null,
+                  String(value.state),
+                  Number(value.lastActivityAt),
+                  typeof value.lastError === "string" ? value.lastError : null,
+                  1710000000000,
+                );
+              }
             } finally {
               db.close();
             }

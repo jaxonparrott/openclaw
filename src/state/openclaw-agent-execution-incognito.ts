@@ -5,6 +5,7 @@ import {
   createIncognitoSessionFacts,
   type IncognitoSessionRunner,
 } from "../config/sessions/session-incognito-actor.js";
+import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import { forkIncognitoSessionFromParent } from "../config/sessions/session-incognito-lifecycle.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -275,11 +276,11 @@ function createIncognitoAgentExecutionOwner(
           throw new Error("Incognito execution reference is released");
         }
       };
-      const run: IncognitoSessionRunner = (
-        currentAuthority,
-        operation,
-        operationSignal,
-        createAdmission,
+      const run: IncognitoSessionRunner = <T>(
+        currentAuthority: IncognitoSessionAuthority,
+        operation: (scope: Pick<Store, "execute">) => Promise<T>,
+        operationSignal?: AbortSignal,
+        createAdmission?: SqliteWorkerAdmissionFactory,
         cleanup = false,
       ) => {
         if (granting) {
@@ -300,9 +301,23 @@ function createIncognitoAgentExecutionOwner(
           { target: identity, assertCurrent: assertOperation },
           async () => {
             try {
-              const result = await runSqliteWorkerStoreOperation(
+              const result = await runSqliteWorkerStoreOperation<
+                AgentDatabaseIncognitoOperations,
+                T
+              >(
                 opened,
-                operation,
+                (scope) => {
+                  const invocation: Pick<Store, "execute"> = {
+                    execute: (command, requestOptions) =>
+                      scope.execute(command, {
+                        signal:
+                          requestOptions?.signal && operationSignal
+                            ? AbortSignal.any([requestOptions.signal, operationSignal])
+                            : (requestOptions?.signal ?? operationSignal),
+                      }),
+                  };
+                  return operation(invocation);
+                },
                 undefined,
                 assertOperation,
                 createAdmission ?? admission(currentAuthority),

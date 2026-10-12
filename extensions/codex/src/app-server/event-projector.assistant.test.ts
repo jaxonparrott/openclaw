@@ -44,6 +44,38 @@ async function streamFinalAnswer(
 }
 
 describe("CodexAppServerEventProjector assistant projection", () => {
+  it("streams the completed tail when final deltas stop short of the item text", async () => {
+    const onPartialReply = vi.fn();
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      onPartialReply,
+      onAgentEvent,
+    });
+    await projector.handleNotification(
+      forCurrentTurn("item/started", { item: finalItem("final", "") }),
+    );
+    await projector.handleNotification(agentMessageDelta("CODEX-STEER-48AB12A2581A45", "final"));
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: finalItem("final", "CODEX-STEER-48AB12A2581A45AB"),
+      }),
+    );
+
+    const assistantEvents = onAgentEvent.mock.calls
+      .map((call) => call[0])
+      .filter((event) => event.stream === "assistant");
+    expect(assistantEvents.at(-1)?.data).toMatchObject({
+      itemId: "final",
+      text: "CODEX-STEER-48AB12A2581A45AB",
+      delta: "AB",
+    });
+    expect(onPartialReply).toHaveBeenLastCalledWith({
+      text: "CODEX-STEER-48AB12A2581A45AB",
+      delta: "AB",
+    });
+  });
+
   it.each(["failed", "interrupted"])(
     "retains streamed partial evidence after a %s turn",
     async (status) => {

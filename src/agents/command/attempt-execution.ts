@@ -56,6 +56,7 @@ import type { RunEntryCandidateOptions } from "../embedded-agent-runner/run-entr
 import { mergeForcedEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
+import { resolveWebchatPromptCacheKey } from "../embedded-agent-runner/run/session-boundary-prompt-cache-key.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { resolveAvailableAgentHarnessPolicy } from "../harness/selection.js";
 import { buildAgentInternalEventContext as buildEventContext } from "../internal-events.js";
@@ -150,10 +151,9 @@ export function runAgentAttempt(
       onLifecycleGenerationChanged?: (lifecycleGeneration: string) => void;
       onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
       onCompactionRequestBudget?: RunEmbeddedAgentInternalParams["onCompactionRequestBudget"];
-      onSuccessfulAuthProfile?: (selection: {
-        authProfileId?: string;
-        authProfileIdSource?: "auto" | "user";
-      }) => void;
+      onSuccessfulAuthProfile?: (
+        selection: Pick<RunEmbeddedAgentInternalParams, "authProfileId" | "authProfileIdSource">,
+      ) => void;
     },
 ) {
   const sessionAuthProfileId = params.sessionEntry?.authProfileOverride?.trim();
@@ -274,7 +274,6 @@ export function runAgentAttempt(
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
-  const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
   const pinnedHarnessId = isRawModelRun
@@ -422,6 +421,16 @@ export function runAgentAttempt(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       sessionTarget: params.sessionTarget,
+      // Internal continuations keep the affinity of the persisted webchat conversation.
+      promptCacheKey:
+        params.sessionEntry?.delivery?.kind === "internal" && params.sessionKey
+          ? resolveWebchatPromptCacheKey({
+              agentId: params.sessionAgentId,
+              provider: params.providerOverride,
+              model: params.modelOverride,
+              sessionKey: params.sessionKey,
+            })
+          : undefined,
       chatType: params.sessionEntry?.chatType,
       contextWindow: params.sessionEntry?.contextWindow,
       agentId: params.sessionAgentId,
@@ -459,14 +468,16 @@ export function runAgentAttempt(
       cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
       oneShotCliRun: params.opts.oneShotCliRun,
       userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      prepareAssistantTranscriptMessage: params.opts.prepareAssistantTranscriptMessage,
       contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
       onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
       disableTools,
       terminalReplyExpectation: replyExpectation,
-      silentReplyPromptMode: replyExpectation === "required" ? "none" : undefined,
+      silentReplyPromptMode:
+        params.opts.silentReplyPromptMode ?? (replyExpectation === "required" ? "none" : undefined),
       bootstrapPromptWarningSignaturesSeen,
-      bootstrapPromptWarningSignature,
+      bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;

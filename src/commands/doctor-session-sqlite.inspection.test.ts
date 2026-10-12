@@ -87,6 +87,7 @@ describe("runDoctorSessionSqlite", () => {
       expect(readOnlySqliteValidationSnapshot(target)).toEqual({
         ok: true,
         snapshot: {
+          archivedSessionIds: new Set(),
           sessionIdsBySessionKey: new Map([[sessionKey, sessionId]]),
           sessionKeysBySessionId: new Map(),
           transcriptEventCountsBySessionId: new Map(promoted ? [[sessionId, 2]] : []),

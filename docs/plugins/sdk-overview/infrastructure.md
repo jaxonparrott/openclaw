@@ -174,6 +174,14 @@ include `hostWaitMs` alongside the existing timing fields; host wait is included
 in `runMs`, not added to it. This field is diagnostic data, not a public config
 option.
 
+The caller deadline also bounds host callbacks. Pass their signal into queued
+reads, writes, and locks so canceled work is removed before admission. Only an
+approval-aware owner with its own deadline uses `hostTimeout: "owner"` to pause
+the pool clock. Responses may shorten the deadline, never renew it. A timeout
+preserves its abort reason and emits `WORKER_HOST_CALLBACK_TIMEOUT` with a
+bounded operation label, without payloads. Accepted native effects still require
+their existing owner's settlement and cleanup receipts.
+
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
 `{ options, temporaryDirectory? }`. Its `options` shallowly override
@@ -420,6 +428,15 @@ when the current process cannot decide environment-dependent eligibility. Omit
 the field only when the contract is not implemented. The host owns
 prior-operation detection, pin creation, and completion; the normalizer returns
 eligibility without opening listeners or creating implicit endpoints.
+
+Retained host config Doctor artifacts also expose `normalizeHistoricalWebhookConfig`.
+It reuses the listener-only migration and returns its config changes, warnings,
+and `historicalWebhookAccountIds`, without applying unrelated compatibility repairs.
+During an update rehearsal, the host can use this operation for a missing plugin
+whose installation is deferred. Selected installed or custom owners still shadow
+the host artifact, and this operation does not complete deferred plugin inspection.
+External plugins are not required to implement this host fallback.
+
 Automatic pins belong to existing accounts, including `accounts.default`, so
 accounts added later do not inherit them. Doctor backs up the config before
 persisting pins with `meta.migrations.webhookListeners`. The marker records exact

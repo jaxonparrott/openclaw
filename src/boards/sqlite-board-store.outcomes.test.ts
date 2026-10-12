@@ -112,6 +112,7 @@ async function receiveExecutedFailure(retire: boolean) {
   };
   const slot: Parameters<typeof receiveSqliteWorkerReply>[0] = {
     current: job,
+    actors: new Set(),
     worker: {
       postMessage() {
         throw new Error("A failure reply must not request another result frame");

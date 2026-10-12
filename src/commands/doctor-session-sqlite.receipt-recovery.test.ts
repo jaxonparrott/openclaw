@@ -239,8 +239,6 @@ describe("retained session receipt recovery", () => {
         fs.writeFileSync(source, "");
         closeOpenClawAgentDatabasesForTest();
         const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-        fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
-        fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
         if (missingRows) {
           const db = openNodeSqliteDatabase(sqlitePath);
           db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
@@ -289,7 +287,6 @@ describe("retained session receipt recovery", () => {
   );
   it.each([
     { replacement: "index", failedManifest: true },
-    { replacement: "database", failedManifest: true },
     { replacement: "index", failedManifest: false },
   ] as const)(
     "recovers verified $replacement content (failed manifest: $failedManifest)",
@@ -358,82 +355,126 @@ describe("retained session receipt recovery", () => {
       });
     },
   );
-  it.each(["missing", "reordered"] as const)(
-    "protects retained history when replacement events are %s",
-    async (change) => {
-      await withOpenClawTestState({ label: "receipt-incomplete-database" }, async (state) => {
-        const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
-          state,
-          "default",
-          "brave",
-        );
-        const imported = await runDoctorSessionSqlite({
-          cfg,
-          env: state.env,
-          allAgents: true,
-          mode: "import",
-        });
-        const before = receipt(state.env);
-        closeOpenClawAgentDatabasesForTest();
-        const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
-        fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
-        fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
-        const db = openNodeSqliteDatabase(sqlitePath);
-        if (change === "missing") {
-          db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
-        } else {
-          db.exec("BEGIN; PRAGMA defer_foreign_keys = ON;");
-          db.prepare("UPDATE transcript_events SET seq = seq + 100 WHERE session_id = ?").run(
-            "legacy-kept",
-          );
-          db.prepare("UPDATE transcript_events SET seq = 101 - seq WHERE session_id = ?").run(
-            "legacy-kept",
-          );
-          db.exec("COMMIT;");
-        }
-        db.close();
-        const manifest = readSessionSqliteMigrationManifest(imported.migrationRun!.manifestPath)!;
-        manifest.failedAt = new Date().toISOString();
-        const historicalIssues = Array.from({ length: 11 }, (_, index) => ({
-          code: `retained_failure_${index}`,
-          message: `Retained migration finding ${index}`,
-        }));
-        manifest.targets[0]!.issues.push(...historicalIssues);
-        fs.writeFileSync(imported.migrationRun!.manifestPath, JSON.stringify(manifest));
-        expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
-        const recovered = await runDoctorSessionSqlite({
-          cfg,
-          env: state.env,
-          agent: "main",
-          mode: "recover",
-        });
-        expect(recovered.targets.flatMap((target) => target.issues)).toContainEqual(
-          expect.objectContaining({
-            code: "retained_plugin_source_conflict",
-            message: expect.stringContaining("legacy-kept.jsonl"),
-          }),
-        );
-        expect(receipt(state.env)).toEqual(before);
-        const jsonReport = JSON.parse(
-          fs.readFileSync(recovered.migrationRun!.failureReportJsonPath!, "utf8"),
-        ) as { targets: Array<{ issues: Array<{ code: string }> }> };
-        const markdownReport = fs.readFileSync(
-          recovered.migrationRun!.failureReportMarkdownPath!,
-          "utf8",
-        );
-        for (const issue of [
-          ...historicalIssues,
-          ...recovered.targets.flatMap((target) => target.issues),
-        ]) {
-          expect(jsonReport.targets.flatMap((target) => target.issues)).toContainEqual(
-            expect.objectContaining({ code: issue.code }),
-          );
-          expect(markdownReport).toContain(`[${issue.code}]`);
-          expect(recovered.supportIssue?.body).toContain(`[${issue.code}]`);
-        }
-        expect(markdownReport).toContain("doctor recover completed with remaining issues");
-        expect(markdownReport).not.toContain("restored and validated");
+  it("reports missing history while superseding a foreign empty-source receipt", async () => {
+    await withOpenClawTestState({ label: "receipt-empty-missing-history" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
+        state,
+        "default",
+        "brave",
+      );
+      const options = { cfg, env: state.env, allAgents: true };
+      await runDoctorSessionSqlite({ ...options, mode: "import" });
+      const source = path.join(path.dirname(storePath), "legacy-kept.jsonl");
+      fs.writeFileSync(source, "");
+      closeOpenClawAgentDatabasesForTest();
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
+      fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
+      fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
+      const db = openNodeSqliteDatabase(sqlitePath);
+      db.prepare("DELETE FROM transcript_events WHERE session_id = ?").run("legacy-kept");
+      db.close();
+      const before = receipt(state.env);
+
+      const recovered = await runDoctorSessionSqlite({ ...options, mode: "recover" });
+      const issues = recovered.targets.flatMap((target) => target.issues);
+      expect(issues).toContainEqual(
+        expect.objectContaining({
+          code: "historical_transcript_deferred",
+          message: expect.stringContaining(source),
+        }),
+      );
+      expect(issues.map((issue) => issue.message).join("\n")).toContain(sqlitePath);
+      expect(recovered.totals.archivedTranscriptFiles).toBe(0);
+      expect(fs.readFileSync(source, "utf8")).toBe("");
+      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual([]);
+      expect(receipt(state.env)).toMatchObject({ ...before, superseded: "different-database" });
+    });
+  });
+  it("protects retained history when replacement events are reordered", async () => {
+    await withOpenClawTestState({ label: "receipt-incomplete-database" }, async (state) => {
+      const { cfg, storePath, scope } = await seedDeferredPluginSessionSource(
+        state,
+        "default",
+        "brave",
+      );
+      const imported = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        allAgents: true,
+        mode: "import",
       });
-    },
-  );
+      const before = receipt(state.env);
+      closeOpenClawAgentDatabasesForTest();
+      const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, scope).path;
+      fs.copyFileSync(sqlitePath, `${sqlitePath}.replacement`);
+      fs.renameSync(`${sqlitePath}.replacement`, sqlitePath);
+      const db = openNodeSqliteDatabase(sqlitePath);
+
+      db.exec("BEGIN; PRAGMA defer_foreign_keys = ON;");
+      db.prepare("UPDATE transcript_events SET seq = seq + 100 WHERE session_id = ?").run(
+        "legacy-kept",
+      );
+      db.prepare("UPDATE transcript_events SET seq = 101 - seq WHERE session_id = ?").run(
+        "legacy-kept",
+      );
+      db.exec("COMMIT;");
+
+      db.close();
+      const reordered = loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" });
+      const manifest = readSessionSqliteMigrationManifest(imported.migrationRun!.manifestPath)!;
+      manifest.failedAt = new Date().toISOString();
+      const historicalIssues = Array.from({ length: 11 }, (_, index) => ({
+        code: `retained_failure_${index}`,
+        message: `Retained migration finding ${index}`,
+      }));
+      manifest.targets[0]!.issues.push(...historicalIssues);
+      fs.writeFileSync(imported.migrationRun!.manifestPath, JSON.stringify(manifest));
+      expect(() => assertSessionStoreMigrationComplete({ cfg, env: state.env })).not.toThrow();
+      const recovered = await runDoctorSessionSqlite({
+        cfg,
+        env: state.env,
+        agent: "main",
+        mode: "recover",
+      });
+      expect(recovered.targets.flatMap((target) => target.issues)).toContainEqual(
+        expect.objectContaining({
+          code: "retained_plugin_receipt_superseded",
+        }),
+      );
+      expect(loadTranscriptEventsSync({ ...scope, sessionId: "legacy-kept" })).toEqual(reordered);
+      const superseded = withExistingOpenClawStateDatabaseReadOnly(
+        ({ db: stateDb }) =>
+          stateDb
+            .prepare("SELECT report_json FROM migration_runs WHERE status = 'superseded'")
+            .get(),
+        { env: state.env },
+      );
+      expect(JSON.parse(String(superseded?.report_json))).toMatchObject({ receipt: before });
+      const jsonReport = JSON.parse(
+        fs.readFileSync(recovered.migrationRun!.failureReportJsonPath!, "utf8"),
+      ) as {
+        targets: Array<{
+          issues: Array<{
+            code: string;
+          }>;
+        }>;
+      };
+      const markdownReport = fs.readFileSync(
+        recovered.migrationRun!.failureReportMarkdownPath!,
+        "utf8",
+      );
+      for (const issue of [
+        ...historicalIssues,
+        ...recovered.targets.flatMap((target) => target.issues),
+      ]) {
+        expect(jsonReport.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({ code: issue.code }),
+        );
+        expect(markdownReport).toContain(`[${issue.code}]`);
+        expect(recovered.supportIssue?.body).toContain(`[${issue.code}]`);
+      }
+      expect(markdownReport).toContain("doctor recover completed with remaining issues");
+      expect(markdownReport).not.toContain("restored and validated");
+    });
+  });
 });

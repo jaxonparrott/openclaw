@@ -683,6 +683,15 @@ The exported `OpenClawAgentSqliteWorkerStore` type retains its `run` and `close`
 contract for existing adapters. The factory's inferred return type additionally
 provides the typed single-command `execute` method.
 
+Concurrent creators that observed the same absent agent database share its captured
+execution owner and native opening. The owner retains the creation reservation until
+all creating borrowers release it or the physical file is admitted. A later creator
+with that same observation can use the admitted file; a replaced target, different
+agent, shared-state database, or incognito owner still refuses admission. Schemas,
+stored bytes, and update behavior are unchanged.
+Queued session admission and writable reads validate through that same owner,
+so its first creation does not invalidate their earlier absence observation.
+
 Agent registration invalidates discovery when a missing store enters creating
 admission or an existing store begins its actual registration transaction. A
 validated native reopen leaves discovery snapshots current. The host rechecks

@@ -447,8 +447,12 @@ The downloaded bundle is stored in the shared SQLite state database. The Gateway
 prepares a new catalog generation in the background, then publishes its model
 rows and prices together without restarting. Picker reads keep using the current
 generation during preparation; a failed or superseded preparation leaves it in
-place. Admitted runs retain their captured generation, and each usage-estimation
-operation uses one pricing context.
+place. Reply and scheduled-run preparation retain their admitted generation before
+yielding, so a catalog update cannot retire the first turn while it is being
+prepared. Selected native model discovery can finish under a still-live run lease
+without publishing over the replacement catalog. Closing the run lease, revoking
+run authority, or shutting down the Gateway still stops that work. Each
+usage-estimation operation uses one pricing context.
 
 Remote data can update or add models only for providers declared by installed
 plugin manifests. It cannot supply API base URLs or request headers, and a

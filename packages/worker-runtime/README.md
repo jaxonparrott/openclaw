@@ -73,3 +73,13 @@ when benchmarking. Report cold and warm completion time, queue latency,
 preparation, host wait, transfer cost, and memory separately. Cancellation proof
 must also observe the execution receipt and resource cleanup so a faster rejected
 Promise is not mistaken for faster settlement.
+
+## Host callback deadlines
+
+The caller deadline also bounds host callbacks. Pass their signal into queued
+reads, writes, and locks so canceled work is removed before admission. Only an
+approval-aware owner with its own deadline uses `hostTimeout: "owner"` to pause
+the pool clock. Responses may shorten the deadline, never renew it. A timeout
+preserves its abort reason and emits `WORKER_HOST_CALLBACK_TIMEOUT` with a
+bounded operation label, without payloads. Accepted native effects still require
+their existing owner's settlement and cleanup receipts.

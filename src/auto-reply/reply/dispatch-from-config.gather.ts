@@ -7,7 +7,10 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
-import type { PreparedReplyDispatchRuntime } from "../../agents/prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimeLease,
+  PreparedReplyDispatchRuntime,
+} from "../../agents/prepared-model-runtime.types.js";
 import { normalizeExplicitSessionKey } from "../../config/sessions/explicit-session-key-normalization.js";
 import {
   deriveInboundMessageHookContext,
@@ -68,6 +71,7 @@ export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
+  onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void,
 ) {
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
@@ -420,6 +424,7 @@ export async function gatherDispatchRequest(
         const { loadPublishedGatewayReplyDispatchRuntime } = await loadPreparedModelRuntime();
         return await loadPublishedGatewayReplyDispatchRuntime({
           agentId: preparedReplyDispatchAgentId,
+          onRuntimeLease,
           abortSignal: params.replyOptions?.abortSignal,
         });
       },

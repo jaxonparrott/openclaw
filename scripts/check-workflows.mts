@@ -7,7 +7,7 @@ import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const ACTIONLINT_REVISION = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
+const ACTIONLINT_REVISION = "644076a59742c2d1540ebd4686eab3c308f0e562";
 const PRE_COMMIT_VERSION = "4.6.2";
 // pre-commit 4.6.2 declares requires-python >=3.10, so an older interpreter only
 // fails after a venv build and a network pip install.
@@ -95,8 +95,8 @@ function runGoActionlint(files: string[]): boolean {
   try {
     const installed = spawnSync(
       "go",
-      ["install", `github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}`],
-      { stdio: "inherit", env: { ...process.env, GOBIN: binDir } },
+      ["install", "-mod=readonly", "github.com/rhysd/actionlint/cmd/actionlint"],
+      { cwd: "tools/actionlint", stdio: "inherit", env: { ...process.env, GOBIN: binDir } },
     );
     // An unavailable pin can still use a cached hook. Lint diagnostics must stay
     // terminal, so acquisition and execution cannot share a go run exit status.

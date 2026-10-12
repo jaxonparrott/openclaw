@@ -7,6 +7,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
   UPGRADE_SURVIVOR_ASSERTION_SCENARIOS,
+  usesCronOwnerAtBaseline,
   usesStructuredToolSearchAtBaseline,
 } from "../../../lib/upgrade-survivor-policy.mjs";
 import {
@@ -21,7 +22,11 @@ import {
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
-import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
+import {
+  assertUpgradeVolumeMigrated,
+  seedPublishedCronJobs,
+  seedUpgradeVolume,
+} from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
 // Keep unrelated packaged assertion commands independent of agent-turn helpers.
@@ -217,7 +222,7 @@ function seedLegacyMeetingTranscripts(stateDir) {
   write(path.join(sessionDir, "summary.md"), "# Design review\n\nShipped transcript summary.\n");
 }
 
-function seedLegacyCronScheduledAuthority(stateDir) {
+async function seedLegacyCronScheduledAuthority(stateDir, packageRoot) {
   const createdAtMs = Date.parse("2026-07-01T10:00:00.000Z");
   const base = {
     enabled: true,
@@ -229,53 +234,57 @@ function seedLegacyCronScheduledAuthority(stateDir) {
     delivery: { mode: "none" },
     state: { nextRunAtMs: createdAtMs + 3_600_000 },
   };
-  writeJson(path.join(stateDir, "cron", "jobs.json"), {
-    version: 1,
-    jobs: [
-      {
-        ...base,
-        id: "cron-pre-cap",
-        name: "Pre-cap agent job",
-        payload: { kind: "agentTurn", message: "pre-cap" },
+  const jobs = [
+    {
+      ...base,
+      id: "cron-pre-cap",
+      name: "Pre-cap agent job",
+      payload: { kind: "agentTurn", message: "pre-cap" },
+    },
+    {
+      ...base,
+      id: "cron-ownerless-cap",
+      name: "Ownerless capped job",
+      payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-owner-session",
+      name: "Persisted owner session",
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
       },
-      {
-        ...base,
-        id: "cron-ownerless-cap",
-        name: "Ownerless capped job",
-        payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-encoded-account",
+      name: "Encoded owner account",
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:personal:direct:user-1",
       },
-      {
-        ...base,
-        id: "cron-owner-session",
-        name: "Persisted owner session",
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-        },
-        payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-agent-mismatch",
+      name: "Mismatched owner agent",
+      owner: {
+        agentId: "other",
+        sessionKey: "agent:main:discord:work:direct:user-2",
       },
-      {
-        ...base,
-        id: "cron-encoded-account",
-        name: "Encoded owner account",
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:personal:direct:user-1",
-        },
-        payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
-      },
-      {
-        ...base,
-        id: "cron-agent-mismatch",
-        name: "Mismatched owner agent",
-        owner: {
-          agentId: "other",
-          sessionKey: "agent:main:discord:work:direct:user-2",
-        },
-        payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
-      },
-    ],
-  });
+      payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
+    },
+  ];
+  if (!usesCronOwnerAtBaseline(requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"))) {
+    for (const job of jobs) {
+      delete job.owner;
+    }
+  }
+  const saved = await seedPublishedCronJobs(stateDir, packageRoot, jobs);
+  assertStrict.deepEqual(saved, jobs, "published cron authority fixture round-trip changed");
 }
 
 function getScenario() {
@@ -303,7 +312,7 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
-function seedState() {
+async function seedState(packageRoot) {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
@@ -342,7 +351,7 @@ function seedState() {
     seedLegacyMeetingTranscripts(stateDir);
   }
   if (scenario === "cron-scheduled-authority") {
-    seedLegacyCronScheduledAuthority(stateDir);
+    await seedLegacyCronScheduledAuthority(stateDir, packageRoot);
   }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     const fixture = readJson(
@@ -656,6 +665,66 @@ function assertConfigSurvived() {
   }
 }
 
+function assertLegacyOperatorPendingDelivery([updateJson, updateErr]) {
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  const fixture = readJson(
+    path.join(
+      requireEnv("OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT"),
+      "legacy-operator-pending-delivery.json",
+    ),
+  );
+  for (const file of [updateJson, updateErr]) {
+    assert(
+      !fs.readFileSync(file, "utf8").includes("Legacy session entry state requires migration"),
+      "published update stopped on legacy pending-delivery state",
+    );
+  }
+  const db = new DatabaseSync(path.join(stateDir, "agents/ops/agent/openclaw-agent.sqlite"), {
+    readOnly: true,
+  });
+  let row;
+  try {
+    row = db
+      .prepare("SELECT current_session_id, entry_json FROM session_nodes WHERE session_key = ?")
+      .get("agent:ops:legacy-pending-delivery");
+  } finally {
+    db.close();
+  }
+  assert(row, "published update did not import legacy session into SQLite");
+  assertStrict.equal(row.current_session_id, "legacy-pending-delivery");
+  const entry = JSON.parse(row.entry_json);
+  assertStrict.equal(entry.sessionId, "legacy-pending-delivery");
+  assertStrict.deepEqual(entry.pendingFinalDelivery, {
+    kind: "replayable",
+    text: "Saved July reply",
+    createdAt: 1710000000000,
+    context: { channel: "telegram", to: "synthetic-recipient" },
+    intentId: "legacy-pending-intent",
+  });
+  assertStrict.deepEqual(
+    Object.keys(entry).filter((key) => key.startsWith("pendingFinalDelivery")),
+    ["pendingFinalDelivery"],
+  );
+  const runsDir = path.join(stateDir, "session-sqlite-migration-runs");
+  const archived = fs
+    .readdirSync(runsDir)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => readJson(path.join(runsDir, name)))
+    .filter((run) => run.completedAt)
+    .flatMap((run) => run.targets.flatMap((target) => target.completedMoves))
+    .some(
+      (move) =>
+        move.kind === "legacy-store" &&
+        move.sourcePath === fixture.storePath &&
+        fs.existsSync(move.archivePath) &&
+        fs.readFileSync(move.archivePath, "utf8") === fixture.original,
+    );
+  assert(archived, "published update did not archive the original legacy session bytes");
+  console.log(
+    "Published updater: legacy pending delivery imported into SQLite; original JSON archived unchanged.",
+  );
+}
+
 function assertStateSurvived() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -821,14 +890,12 @@ function assertAuthProfileMigrationSurvived(stateDir, stage) {
 }
 
 function assertCronScheduledAuthorityMigrated(stateDir, stage) {
-  const legacyStorePath = path.join(stateDir, "cron", "jobs.json");
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  assert(
+    !fs.existsSync(path.join(stateDir, "cron", "jobs.json")),
+    "retired cron fixture store exists",
+  );
   if (stage === "baseline") {
-    if (fs.existsSync(legacyStorePath)) {
-      const jobs = readJson(legacyStorePath).jobs ?? [];
-      assert(jobs.length === 5, "legacy cron authority fixture row count changed before update");
-      return;
-    }
     assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
     const db = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -848,16 +915,34 @@ function assertCronScheduledAuthorityMigrated(stateDir, stage) {
     const rows = db
       .prepare("SELECT job_id, job_json FROM cron_jobs WHERE job_id LIKE 'cron-%'")
       .all();
-    const jobs = new Map(rows.map((row) => [row.job_id, JSON.parse(row.job_json)]));
+    const jobs = new Map(
+      rows.map((row) => {
+        assert(typeof row.job_id === "string", "persisted cron fixture ID must be a string");
+        return [row.job_id, JSON.parse(row.job_json)];
+      }),
+    );
     assert(jobs.size === 5, `cron authority fixture row count changed: ${jobs.size}`);
-    assert(
-      jobs.get("cron-encoded-account")?.scheduledToolPolicy?.ownerAccountId === "personal",
-      "session-encoded account authority was not recovered",
+    const persistedOwner = usesCronOwnerAtBaseline(
+      requireEnv("OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION"),
     );
-    assert(
-      jobs.get("cron-encoded-account")?.owner?.accountId === "personal",
-      "session-encoded account was not projected onto the owner",
-    );
+    if (persistedOwner) {
+      assert(
+        jobs.get("cron-encoded-account")?.scheduledToolPolicy?.ownerAccountId === "personal",
+        "session-encoded account authority was not recovered",
+      );
+      assert(
+        jobs.get("cron-encoded-account")?.owner?.accountId === "personal",
+        "session-encoded account was not projected onto the owner",
+      );
+    } else {
+      for (const job of jobs.values()) {
+        assert(job.owner === undefined, "ownerless baseline unexpectedly gained an owner");
+        assert(
+          job.scheduledToolPolicy === undefined,
+          "ownerless baseline unexpectedly gained scheduled authority",
+        );
+      }
+    }
     for (const id of [
       "cron-pre-cap",
       "cron-ownerless-cap",
@@ -1066,11 +1151,45 @@ function assertSessionMetadataMigrated(stateDir, stage) {
   assert(direct?.sessionId === LEGACY_SESSION_DIRECT_ID, "direct legacy session row missing");
   assert(group?.sessionId === LEGACY_SESSION_GROUP_ID, "channel legacy session row missing");
   if (getScenario() === "acpx-openclaw-tools-bridge") {
-    assertStrict.deepEqual(
-      group.acp,
-      LEGACY_ACP_META,
-      "saved ACP session or model selection changed",
-    );
+    let acp;
+    if (stage === "baseline") {
+      acp = group.acp;
+    } else {
+      const db = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
+        readOnly: true,
+      });
+      try {
+        const rows = db
+          .prepare(
+            `SELECT backend, agent, runtime_session_name, identity_json, mode,
+                    runtime_options_json, cwd, state, last_activity_at, last_error
+             FROM acp_sessions
+             WHERE session_id = ?`,
+          )
+          .all(LEGACY_SESSION_GROUP_ID);
+        assert(rows.length <= 1, "saved ACP session binding is ambiguous");
+        const row = rows[0];
+        if (row) {
+          acp = {
+            backend: row.backend,
+            agent: row.agent,
+            runtimeSessionName: row.runtime_session_name,
+            ...(row.identity_json ? { identity: JSON.parse(row.identity_json) } : {}),
+            mode: row.mode === "oneshot" ? "oneshot" : "persistent",
+            ...(row.runtime_options_json
+              ? { runtimeOptions: JSON.parse(row.runtime_options_json) }
+              : {}),
+            ...(row.cwd != null ? { cwd: row.cwd } : {}),
+            state: row.state === "running" || row.state === "error" ? row.state : "idle",
+            lastActivityAt: row.last_activity_at,
+            ...(row.last_error != null ? { lastError: row.last_error } : {}),
+          };
+        }
+      } finally {
+        db.close();
+      }
+    }
+    assertStrict.deepEqual(acp, LEGACY_ACP_META, "saved ACP session or model selection changed");
   }
   const migratedSessions = [
     [LEGACY_SESSION_MAIN_ID, main],
@@ -1833,7 +1952,7 @@ if (command === "list-scenarios") {
 } else if (command === "missing-load-path") {
   await import("./missing-load-path.mjs");
 } else if (command === "seed") {
-  seedState();
+  await seedState(process.argv[3]);
 } else if (command === "seed-legacy-operator") {
   legacyOperator.seedLegacyOperatorState();
 } else if (command === "seed-legacy-operator-external-plugin") {
@@ -1848,6 +1967,10 @@ if (command === "list-scenarios") {
   legacyOperator.seedLegacyOperatorAgent();
 } else if (command === "seed-legacy-operator-gateway") {
   legacyOperator.seedLegacyOperatorGatewayState();
+} else if (command === "seed-legacy-operator-pending-delivery") {
+  legacyOperator.seedLegacyOperatorPendingDelivery();
+} else if (command === "assert-legacy-operator-pending-delivery") {
+  assertLegacyOperatorPendingDelivery(process.argv.slice(3));
 } else if (command === "assert-legacy-operator-gateway") {
   legacyOperator.assertLegacyOperatorGatewayState(process.argv[3] || "candidate");
 } else if (command === "legacy-operator-turn") {

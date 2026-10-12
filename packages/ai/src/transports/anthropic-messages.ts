@@ -32,6 +32,7 @@ import {
   requiresClaudeBetweenToolsThinking,
   resolveAnthropicThinkingEffort,
   resolveClaudeSonnet55ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeXhighEffort,
 } from "../providers/anthropic-model-contract.js";
@@ -455,9 +456,10 @@ function buildAnthropicGenerationParams({
 
   if (options?.toolChoice) {
     const normalizedToolChoice = normalizeAnthropicToolChoice(
-      mandatoryAdaptiveThinking ||
-        options?.thinkingEnabled === true ||
-        resolveClaudeSonnet55ModelIdentity(model) !== undefined,
+      resolveClaudeHaiku55ModelIdentity(model) === undefined &&
+        (mandatoryAdaptiveThinking ||
+          options?.thinkingEnabled === true ||
+          resolveClaudeSonnet55ModelIdentity(model) !== undefined),
       options.toolChoice,
     );
     const projectedToolChoice = toolProjection
@@ -597,7 +599,7 @@ export async function buildAnthropicRequest(
     supportsCacheControlOnTools,
     cacheBreakpointOptOutMessageIndexes,
   );
-  return { params, toolProjection, usedCompactionReplay: replayPlan.compaction !== undefined };
+  return { params, toolProjection, replayedCompaction: replayPlan.compaction };
 }
 
 /** Apply caller payload edits before restoring required request contracts and beta headers. */
