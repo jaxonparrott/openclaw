@@ -1,6 +1,7 @@
 // Public gateway-client package surface: connection client, device auth,
 // readiness helpers, event-loop readiness, and timeout utilities.
 export * from "./client.js";
+export { GatewayProtocolRequestPayloadTooLargeError } from "./protocol-request.js";
 export * from "./chat-stream-message.js";
 export * from "./run-recovery-text.js";
 export * from "./browser-device-auth.js";

@@ -275,3 +275,12 @@ from `@openclaw/gateway-protocol`, not from bundled implementation paths.
   logging stay host-owned through `GatewayClientHostDeps`.
 - Protocol changes are additive first. Incompatible changes require an explicit
   wire-version decision and coordinated server/client follow-through.
+
+## Request size limits
+
+After the handshake, Node and browser clients enforce the Gateway's
+`hello.policy.maxPayload` limit against the exact serialized UTF-8 request frame.
+Oversized requests reject locally with `GatewayProtocolRequestPayloadTooLargeError`
+(`code: "CLIENT_PAYLOAD_TOO_LARGE"`, `requestSent: false`, `payloadBytes`, and
+`maxPayloadBytes`). The connection stays open; reduce the request size before
+retrying. Each new connection uses its own advertised limit.

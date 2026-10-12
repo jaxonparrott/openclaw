@@ -67,3 +67,22 @@ export class GatewayProtocolRequestTimeoutError extends Error {
     this.requestSent = params.requestSent;
   }
 }
+
+/** A definitive local rejection: the oversized frame was never sent. */
+export class GatewayProtocolRequestPayloadTooLargeError extends Error {
+  readonly code = "CLIENT_PAYLOAD_TOO_LARGE";
+  readonly requestSent = false;
+  readonly method: string;
+  readonly payloadBytes: number;
+  readonly maxPayloadBytes: number;
+
+  constructor(params: { method: string; payloadBytes: number; maxPayloadBytes: number }) {
+    super(
+      `Gateway request ${params.method} is ${params.payloadBytes} bytes; the limit is ${params.maxPayloadBytes} bytes. Reduce the request size and try again.`,
+    );
+    this.name = "GatewayProtocolRequestPayloadTooLargeError";
+    this.method = params.method;
+    this.payloadBytes = params.payloadBytes;
+    this.maxPayloadBytes = params.maxPayloadBytes;
+  }
+}

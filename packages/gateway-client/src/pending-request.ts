@@ -5,6 +5,7 @@ import {
 } from "@openclaw/gateway-protocol/restart-unavailable";
 import {
   GatewayProtocolRequestError,
+  GatewayProtocolRequestPayloadTooLargeError,
   GatewayProtocolRequestTimeoutError,
   retainGatewayResponsePayload,
   type GatewayProtocolRequestOptions,
@@ -107,6 +108,7 @@ export class GatewayPendingRequests {
     method: string,
     params?: unknown,
     options?: GatewayProtocolRequestOptions,
+    maxPayloadBytes?: number,
   ): Promise<T> {
     let id: string;
     try {
@@ -181,6 +183,16 @@ export class GatewayPendingRequests {
       this.pending.set(id, pending);
       try {
         const frame = JSON.stringify({ type: "req", id, method, params });
+        if (maxPayloadBytes !== undefined) {
+          const payloadBytes = new TextEncoder().encode(frame).byteLength;
+          if (payloadBytes > maxPayloadBytes) {
+            throw new GatewayProtocolRequestPayloadTooLargeError({
+              method,
+              payloadBytes,
+              maxPayloadBytes,
+            });
+          }
+        }
         const send = () => {
           if (this.pending.get(id) !== pending) {
             return;
@@ -208,7 +220,13 @@ export class GatewayPendingRequests {
         }
         send();
       } catch (error) {
-        if (retire("CLIENT_SEND_ERROR")) {
+        if (
+          retire(
+            error instanceof GatewayProtocolRequestPayloadTooLargeError
+              ? error.code
+              : "CLIENT_SEND_ERROR",
+          )
+        ) {
           reject(error instanceof Error ? error : new Error(String(error)));
         }
       }

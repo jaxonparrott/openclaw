@@ -4,6 +4,7 @@ import type { GatewayProtocolClientOptions } from "./protocol-client-contract.js
 import {
   GatewayProtocolClient,
   GatewayProtocolRequestError,
+  GatewayProtocolRequestPayloadTooLargeError,
   GatewayProtocolRequestTimeoutError,
   type GatewayProtocolRequestOptions,
   type GatewayProtocolRequestTiming,
@@ -92,6 +93,90 @@ afterEach(() => {
 });
 
 describe("GatewayProtocolClient requests", () => {
+  it("rejects oversized UTF-8 frames without sending or closing and accepts the exact limit", async () => {
+    const onSent = vi.fn();
+    const timings: GatewayProtocolRequestTiming[] = [];
+    const requestId = "00000000-0000-0000-0000-000000000000";
+    const params = { message: "😀" };
+    const maxPayload = Buffer.byteLength(
+      JSON.stringify({ type: "req", id: `2:${requestId}`, method: "chat.send", params }),
+    );
+    const { client, connections } = createRequestHarness({
+      createRequestId: () => requestId,
+      onRequestTiming: (timing) => timings.push(timing),
+    });
+    try {
+      const connection = connections[0];
+      assert(connection);
+      connection.handlers.message(
+        JSON.stringify({
+          type: "event",
+          event: "connect.challenge",
+          payload: { nonce: "challenge" },
+        }),
+      );
+      respond(connection, latestFrame(connection).id, { policy: { maxPayload } });
+      await Promise.resolve();
+      const rejected = client
+        .request("chat.send", { message: "😀😀" }, { onSent })
+        .catch((error: unknown) => error);
+      expect(connection.frames).toHaveLength(1);
+      const error = await rejected;
+      expect(error).toBeInstanceOf(GatewayProtocolRequestPayloadTooLargeError);
+      expect(error).toMatchObject({
+        code: "CLIENT_PAYLOAD_TOO_LARGE",
+        requestSent: false,
+        method: "chat.send",
+        payloadBytes: maxPayload + 4,
+        maxPayloadBytes: maxPayload,
+      });
+      expect(isGatewayProtocolResponseError(error)).toBe(false);
+      expect(onSent).not.toHaveBeenCalled();
+      expect(connection.frames).toHaveLength(1);
+      expect(client.connected).toBe(true);
+      expect(client.hasPendingRequests).toBe(false);
+      expect(timings.at(-1)?.errorCode).toBe("CLIENT_PAYLOAD_TOO_LARGE");
+      const accepted = client.request("chat.send", params, { onSent });
+      respond(connection, latestFrame(connection).id, { accepted: true });
+      await expect(accepted).resolves.toEqual({ accepted: true });
+      expect(onSent).toHaveBeenCalledOnce();
+      expect(connection.frames).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("does not carry a payload limit across connection handshakes", async () => {
+    const { client, connections } = createRequestHarness();
+    try {
+      const first = connections[0];
+      assert(first);
+      first.handlers.message(
+        JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "first" } }),
+      );
+      respond(first, latestFrame(first).id, { policy: { maxPayload: 1 } });
+      await Promise.resolve();
+      await expect(client.request("health")).rejects.toBeInstanceOf(
+        GatewayProtocolRequestPayloadTooLargeError,
+      );
+      client.stop();
+      client.start();
+      const second = connections[1];
+      assert(second);
+      second.handlers.message(
+        JSON.stringify({ type: "event", event: "connect.challenge", payload: { nonce: "second" } }),
+      );
+      expect(latestFrame(second).method).toBe("connect");
+      respond(second, latestFrame(second).id, { policy: { maxPayload: 1000 } });
+      await Promise.resolve();
+      const health = client.request("health");
+      respond(second, latestFrame(second).id, { ok: true });
+      await expect(health).resolves.toEqual({ ok: true });
+    } finally {
+      client.stop();
+    }
+  });
+
   it.each(["event", "refusal"])(
     "parks 40 polling identity clients during 30 seconds of suspension (%s)",
     async (notification) => {
