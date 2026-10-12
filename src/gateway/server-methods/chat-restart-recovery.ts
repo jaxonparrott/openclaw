@@ -2,6 +2,7 @@ import { createHmac } from "node:crypto";
 import type { HumanMention } from "../../../packages/gateway-protocol/src/index.js";
 import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { listActiveEmbeddedRunSessionIds } from "../../agents/embedded-agent-runner/active-run-projections.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import { shouldComputeCommandAuthorized } from "../../auto-reply/command-detection.js";
 import { replyRunRegistry } from "../../auto-reply/reply/reply-run-registry.js";
 import {
@@ -45,9 +46,10 @@ type RestartSafeChatRequest = {
 };
 
 type RestartSafeChatAdmission = {
+  expectedState?: SessionTranscriptTurnExpectedState;
+  recoveryCleanupPatch?: SessionTranscriptTurnLifecyclePatch;
   priorTerminalSourceRunId?: string;
   requestFingerprint: string;
-  retryExpectedState?: SessionTranscriptTurnExpectedState;
 };
 
 export type RestartSafeChatTerminalState = {
@@ -242,7 +244,11 @@ function isRestartSafeChatSession(params: {
     entry?.sessionId &&
     params.sessionKey !== "global" &&
     entry.status !== "running" &&
-    entry.abortedLastRun !== true &&
+    (entry.abortedLastRun !== true ||
+      // A settled Stop is history; a recovery aggregate or delivery still owns work.
+      (entry.status === "killed" &&
+        entry.mainRestartRecovery === undefined &&
+        entry.restartRecoveryDeliveryRunId === undefined)) &&
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
@@ -351,13 +357,17 @@ export function resolveRestartSafeChatAdmission(params: {
   }
   return {
     requestFingerprint: request.fingerprint,
-    ...(retryableClaim
+    ...(entry.abortedLastRun === true
+      ? { recoveryCleanupPatch: buildMainSessionRecoveryClearPatch(entry) }
+      : {}),
+    ...(retryableClaim || entry.abortedLastRun === true
       ? {
-          retryExpectedState: buildRestartRecoveryExpectedState(entry),
+          expectedState: buildRestartRecoveryExpectedState(entry),
         }
-      : entry.restartRecoveryDeliverySourceRunId
-        ? { priorTerminalSourceRunId: entry.restartRecoveryDeliverySourceRunId }
-        : {}),
+      : {}),
+    ...(!retryableClaim && entry.restartRecoveryDeliverySourceRunId
+      ? { priorTerminalSourceRunId: entry.restartRecoveryDeliverySourceRunId }
+      : {}),
   };
 }
 
@@ -370,10 +380,12 @@ export function buildRestartSafeChatTranscriptState(params: {
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
 } {
   return {
-    ...(params.admission.retryExpectedState
-      ? { expectedSessionState: params.admission.retryExpectedState }
+    ...(params.admission.expectedState
+      ? { expectedSessionState: params.admission.expectedState }
       : {}),
     sessionLifecyclePatch: {
+      // Clear terminal recovery residue before this transaction admits a new delivery owner.
+      ...params.admission.recoveryCleanupPatch,
       // The runner records `pending` only while a hook is executing. With no
       // checkpoint, recovery simply re-enters the normal agent hook pipeline.
       restartRecoveryBeforeAgentReplyState: undefined,

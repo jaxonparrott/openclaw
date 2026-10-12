@@ -39,6 +39,7 @@ import type {
   RespondFn,
 } from "./server-methods/types.js";
 import { pendingChatSendDedupeKey } from "./server-shared.js";
+import { registerStoppedGoalTests } from "./server.chat-goal-stopped.test-support.js";
 import { seedDeletedSessionTranscript } from "./session-history-fixture.test-support.js";
 import {
   bindSessionRowProjection,
@@ -248,10 +249,9 @@ function expectNoDispatch() {
 }
 
 async function waitForModelRun(count = 1) {
-  await Promise.race([
-    modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
-  ]);
+  // The Gateway can release admission before the reply pipeline acquires its turn.
+  // Only the model-start event proves dispatch across that handoff.
+  await modelStarted.promise;
   expect(context.logGateway.error).not.toHaveBeenCalled();
   expect(
     runEmbeddedAgent.mock.calls,
@@ -874,6 +874,28 @@ describe("Goal chat admission and continuation", () => {
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(loadSessionEntry(scope())?.goal?.status).toBe("complete");
   });
+
+  registerStoppedGoalTests(() => ({
+    client,
+    context,
+    sessionKey,
+    sessionId,
+    runEmbeddedAgent,
+    scope,
+    userMessages,
+    goalStart,
+    rpc,
+    waitForModelRun,
+    waitForDispatchEnd,
+    withHeldModel,
+    expectNoDispatch,
+    holdModelUntil: (release) => {
+      modelRelease = release;
+    },
+    resetModelStarted: () => {
+      modelStarted = createDeferred();
+    },
+  }));
 
   it("resumes once through the real reply pipeline despite failed postcommit notification", async () => {
     const objective = "Finish the release checklist";
