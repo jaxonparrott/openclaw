@@ -107,8 +107,6 @@ export function registerStoppedGoalTests(getFixture: () => StoppedGoalFixture) {
       controller: new AbortController(),
       sessionKey,
       sessionId,
-      startedAtMs: Date.now(),
-      expiresAtMs: Date.now() + 60_000,
     });
     try {
       const queued = await rpc("sessions.goal.update", {
