@@ -1,5 +1,6 @@
 // Compare-only text views for matching imported CLI prompts to local rows.
 import { stripCliSessionDriftNote } from "../agents/cli-session.js";
+import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import {
   normalizeInputProvenance,
   readInterSessionPromptEnvelope,
@@ -58,4 +59,25 @@ function stripLeadingSystemEventLines(text: string): string {
 // around the user's text before handing it to the CLI.
 export function stripCliPromptDecorations(text: string): string {
   return stripLeadingSystemEventLines(stripCliSessionDriftNote(text));
+}
+
+// Claude records CLI-injected @cache-path suffixes as user text. Keep the
+// stored content intact; this normalized view is only for proving a redundant
+// imported row against the local turn that owns the durable media facts.
+export function stripTrailingCliImageMentions(text: string): {
+  text: string;
+  stripped: boolean;
+} {
+  const lines = text.split("\n");
+  let end = lines.length;
+  while (end > 0) {
+    const line = lines[end - 1]?.trim() ?? "";
+    if (!line.startsWith("@") || !isOpenClawCliImageCachePath(line.slice(1))) {
+      break;
+    }
+    end -= 1;
+  }
+  return end === lines.length
+    ? { text, stripped: false }
+    : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
 }

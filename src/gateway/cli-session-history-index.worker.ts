@@ -8,7 +8,6 @@ import {
   hashCliImageTurnEntryId,
   readCliImageTurnContext,
 } from "../agents/cli-image-turn-correlation.js";
-import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 // Imported CLI history merge helpers.
 // Deduplicates external history messages against local OpenClaw transcripts.
@@ -28,6 +27,7 @@ import { createCliAssistantTextReceipts } from "./cli-session-history-receipts.w
 import {
   readRoutedPromptView,
   stripCliPromptDecorations,
+  stripTrailingCliImageMentions,
 } from "./cli-session-history.prompt-text.js";
 
 const INDEX_INSERT_BATCH_ROWS = 65;
@@ -46,27 +46,6 @@ type ComparableHistoryMessage = {
   routedKey?: string;
   timestamp?: number;
 };
-
-// Claude records CLI-injected @cache-path suffixes as user text. Keep the
-// stored content intact; this normalized view is only for proving a redundant
-// imported row against the local turn that owns the durable media facts.
-function stripTrailingCliImageMentions(text: string): {
-  text: string;
-  stripped: boolean;
-} {
-  const lines = text.split("\n");
-  let end = lines.length;
-  while (end > 0) {
-    const line = lines[end - 1]?.trim() ?? "";
-    if (!line.startsWith("@") || !isOpenClawCliImageCachePath(line.slice(1))) {
-      break;
-    }
-    end -= 1;
-  }
-  return end === lines.length
-    ? { text, stripped: false }
-    : { text: lines.slice(0, end).join("\n").trimEnd(), stripped: true };
-}
 
 function isClaudeCliImportedUserMessage(message: unknown, role: string | undefined): boolean {
   if (role !== "user") {
